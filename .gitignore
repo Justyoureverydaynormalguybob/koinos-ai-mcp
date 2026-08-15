@@ -1,0 +1,18 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Third-party reference docs — kept locally, never committed (see CLAUDE.md)
+*.pdf
+*.docx
+reference/
+
+# Downloaded binaries (e.g. the Koinos AI installer)
+*.exe
+*.AppImage
