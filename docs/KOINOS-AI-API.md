@@ -143,6 +143,12 @@ listed key carries `{id, name, createdAt, lastUsedAt, budgetUsdMonthly, usage:
 
 ## Observed live responses (v0.25.8, 2026-08-16)
 
+`GET /core/models` grew on 0.25.x: alongside `aliases` it now returns `storage`,
+`runtime`, `download` (in-flight model download progress), `runtimeDownload`,
+`importing` (`{path, pct}` for a running custom import), `importError`, and
+`ensure` (`{alias, state, error}` for a background ensure job) — read from
+gateway.js @ v0.25.8.
+
 `GET /core/network/models` → `{ ok, workersOnline, models: [{model, providers}] }`
 — what the network can serve right now, e.g. `koinos-fast` from 3 providers,
 `qwen25-32b` from 1.
@@ -181,6 +187,23 @@ Mutating shapes (confirmed from upstream source, not probing):
   `await this.tasks.runNow(id)`) — when the 200 arrives, the run has finished and
   `task.lastChatId` already points at the result chat. No polling needed to read
   the answer back; see the queueing quirk below before ever retrying one.
+- Custom model import (gateway.js + model-manager.js @ v0.25.8):
+  `POST /core/models/import` `{path, label?}` — `path` must be an existing,
+  non-empty `.gguf` on the node's own disk. The file is SHA-256-hashed as a job
+  and **referenced in place, never copied** — moving it later breaks the model.
+  Replies `{ok, done: true, entry}` if hashing beats an 800ms race, else
+  `{ok, done: false}`; poll `GET /core/models` → `importing: {path, pct}` /
+  `importError`. Entry: `{alias: "custom-<slug>", label ≤60, path, sha256,
+  sizeBytes, contextSize: 4096, minRamGb, importedAt}`. One import at a time;
+  duplicate hashes (catalog or already-imported) and operator-quarantined hashes
+  are rejected. NOTE: these two routes 400 with a **nested** error shape
+  `{ok: false, error: {message}}`, unlike the flat strings elsewhere on /core.
+- `DELETE /core/models/custom/<alias>` → `{ok: true}` — deregisters only; the
+  GGUF stays on disk ("the file itself is the user's — never deleted").
+  Unknown alias → 400 "No such imported model".
+- `POST /core/earn/nudge` — no body → `{ok: true, …}`. Re-registers with the
+  scheduler immediately instead of on the next timer; upstream comment: "OS just
+  woke from standby".
 
 Route quirks (v0.23.3; re-checked on v0.25.8 — read shapes unchanged):
 

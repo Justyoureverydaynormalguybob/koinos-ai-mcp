@@ -144,6 +144,11 @@ export function startFakeNode({ routes } = {}) {
         status: 200,
         body: { ok: true, started: true, alias: "koinos-balanced" },
       },
+      // Import replies done:false after ~800ms upstream; the UI polls
+      // GET /core/models (importing.pct / importError) for progress.
+      "POST /core/models/import": { status: 200, body: { ok: true, done: false } },
+      "DELETE /core/models/custom/custom-tiny": { status: 200, body: { ok: true } },
+      "POST /core/earn/nudge": { status: 200, body: { ok: true } },
       "POST /core/tasks": { status: 200, body: { ok: true, task: { id: "t123", name: "morning" } } },
       "POST /core/tasks/t123/run": {
         status: 200,

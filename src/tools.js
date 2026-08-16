@@ -10,6 +10,8 @@
 // endpoints that create, reveal, restore, unlock, or move funds are
 // deliberately not wrapped at any confirmation level.
 
+import { latestAppRelease, compareVersions } from "./release.js";
+
 const RUN_TIMEOUT_MS = 120_000;
 
 const CONFIRM = {
@@ -191,15 +193,19 @@ export const tools = [
     description:
       "Aggregate status across every configured Koinos AI node (read-only): " +
       "reachability, app version, active model, earning state, and privacy " +
-      "mode per node, fetched concurrently. The returned names are what the " +
-      "`node` argument on other tools accepts. Use this first when more than " +
-      "one machine is configured.",
+      "mode per node, fetched concurrently. Also checks the latest Koinos AI " +
+      "release on GitHub (cached, fail-soft; the server's only outbound call " +
+      "— disable with KOINOS_AI_NO_VERSION_CHECK=1) and flags nodes running " +
+      "an older version. The returned names are what the `node` argument on " +
+      "other tools accepts. Use this first when more than one machine is " +
+      "configured.",
     inputSchema: {
       type: "object",
       properties: {},
       additionalProperties: false,
     },
     handler: async (_client, _args, pool) => {
+      const latestPromise = latestAppRelease();
       const nodes = await Promise.all(
         pool.all().map(async ({ node, client }) => {
           const out = {
@@ -239,7 +245,19 @@ export const tools = [
           return out;
         }),
       );
-      return { defaultNode: pool.defaultName, nodes };
+      const latest = await latestPromise;
+      if (latest) {
+        for (const n of nodes) {
+          if (typeof n.version === "string" && n.version !== "") {
+            n.updateAvailable = compareVersions(latest.version, n.version) > 0;
+          }
+        }
+      }
+      return {
+        defaultNode: pool.defaultName,
+        ...(latest ? { latestRelease: latest } : {}),
+        nodes,
+      };
     },
   },
 
@@ -276,6 +294,24 @@ export const tools = [
     handler: (client, args) =>
       confirmGate(args, "Stop earning: the node stops accepting network compute jobs.") ??
       client.post("/core/earn/stop", {}),
+  },
+  {
+    name: "earn_nudge",
+    description:
+      "MUTATING — makes the node re-register with the network scheduler " +
+      "immediately instead of waiting for its next heartbeat. The fix when " +
+      "earning is on but the node has dropped out of the network view " +
+      "(typically after OS sleep/standby — check with network_overview). " +
+      "Does not start or stop earning. Requires confirm: true.",
+    annotations: { readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: { node: NODE_PROP, confirm: CONFIRM },
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(args, "Re-register this node with the network scheduler now.") ??
+      client.post("/core/earn/nudge", {}),
   },
   {
     name: "network_set_privacy_mode",
@@ -344,6 +380,81 @@ export const tools = [
         };
       }
       return client.post("/core/models/ensure", { alias });
+    },
+  },
+  {
+    name: "model_import",
+    description:
+      "MUTATING — registers a GGUF file already on the node's own disk as a " +
+      "custom model (bring-your-own model). The node SHA-256-hashes the file " +
+      "— minutes for multi-GB files — and then serves it under a new " +
+      "custom-<name> alias. The file is referenced in place, never copied: " +
+      "moving it later breaks the model. A response with done: false means " +
+      "hashing is still running — poll models_list (importing.pct, " +
+      "importError); done: true carries the new entry. One import runs at a " +
+      "time; never re-submit while one is in flight. Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Absolute path to a .gguf file on the node's machine",
+        },
+        label: { type: "string", description: "Display label (max 60 chars; defaults to the filename)" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      const path = String(args.path ?? "").trim();
+      if (!path) throw new Error("Missing required argument: path (non-empty string)");
+      return (
+        confirmGate(
+          args,
+          `Import the GGUF at ${path} as a custom model. The node will hash ` +
+            "the whole file (minutes for multi-GB files) and reference it in " +
+            "place — it must stay where it is.",
+        ) ??
+        client.post("/core/models/import", {
+          path,
+          ...(args.label !== undefined ? { label: args.label } : {}),
+        })
+      );
+    },
+  },
+  {
+    name: "model_remove_custom",
+    description:
+      "MUTATING — deregisters an imported custom model by its custom-<name> " +
+      "alias. The GGUF file itself is never deleted (it belongs to the " +
+      "user), and re-importing it restores the model. Built-in catalog " +
+      "aliases cannot be removed this way. Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        alias: {
+          type: "string",
+          description: "The custom model's alias, e.g. custom-my-model (see models_list)",
+        },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["alias"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      const alias = String(args.alias ?? "").trim();
+      if (!alias) throw new Error("Missing required argument: alias (non-empty string)");
+      return (
+        confirmGate(
+          args,
+          `Deregister custom model ${alias} (the GGUF file stays on disk).`,
+        ) ?? client.delete(`/core/models/custom/${encodeURIComponent(alias)}`)
+      );
     },
   },
   {

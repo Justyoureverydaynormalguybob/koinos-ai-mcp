@@ -61,7 +61,9 @@ Or in any MCP client config:
 
 Configuration (all optional): `KOINOS_AI_BASE_URL` (default `http://127.0.0.1:41100`,
 honours upstream's `KAI_CORE_PORT`), `KOINOS_AI_API_KEY` (sent as a Bearer token when set),
-`KOINOS_AI_TIMEOUT_MS` (default `10000`).
+`KOINOS_AI_TIMEOUT_MS` (default `10000`), `KOINOS_AI_NO_VERSION_CHECK=1` (skip the
+`nodes_status` update check against the latest GitHub release — the server's only
+outbound call beyond your own nodes; it's cached and fail-soft).
 
 ### More than one machine
 
@@ -77,7 +79,7 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 
 | Tool | Kind | What it does |
 |---|---|---|
-| `nodes_status` | read-only | One view across every configured machine: reachability, version, model, earning, privacy |
+| `nodes_status` | read-only | One view across every configured machine: reachability, version (with update flag), model, earning, privacy |
 | `health` | read-only | Node status: version, hardware, runtime, model storage (doubles as download progress) |
 | `models_list` | read-only | Model alias catalog with package pins, sizes, licenses, per-alias status |
 | `earn_status` | read-only | Earn worker state, jobs, receipts, earnings, wallet summary (never key material) |
@@ -90,8 +92,10 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `docs_list` / `doc_get` | read-only | Stored documents |
 | `keys_list` | read-only | API key metadata + whether auth is required (keys hashed upstream) |
 | `earn_start` / `earn_stop` | **mutating** | Start/stop selling idle compute for KAI |
+| `earn_nudge` | **mutating** | Re-register with the scheduler now (node dropped off after OS standby) |
 | `network_set_privacy_mode` | **mutating** | Change privacy posture (local-only / local-first / network) |
 | `model_ensure` | **mutating** | Download+load a model by alias; without `confirm` it just reports the size |
+| `model_import` / `model_remove_custom` | **mutating** | Register (or deregister) your own GGUF file as a custom model — the file is referenced in place, never copied or deleted |
 | `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts; `task_run_now` returns the model's answer |
 | `chat_rename` / `chat_delete` | **mutating** | Rename or permanently delete a chat conversation |
 | `key_create` / `key_revoke` / `key_set_budget` | **mutating** | API keys for `/v1/*`, with per-key monthly network spending caps |

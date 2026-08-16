@@ -3,6 +3,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+// Tests must never reach out to GitHub — the nodes_status update check is
+// re-enabled per-test against the fake node where it is under test.
+process.env.KOINOS_AI_NO_VERSION_CHECK = "1";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../src/server.js";
@@ -43,6 +47,7 @@ test("tools/list exposes the full read surface", async () => {
       "chats_list",
       "doc_get",
       "docs_list",
+      "earn_nudge",
       "earn_start",
       "earn_status",
       "earn_stop",
@@ -52,6 +57,8 @@ test("tools/list exposes the full read surface", async () => {
       "key_set_budget",
       "keys_list",
       "model_ensure",
+      "model_import",
+      "model_remove_custom",
       "models_list",
       "network_models",
       "network_overview",
@@ -166,6 +173,9 @@ test("mutating tools without confirm change nothing and return a preview", async
       ["key_create", { name: "ci" }],
       ["key_revoke", { id: "key_ab12cd34ef56" }],
       ["key_set_budget", { id: "key_ab12cd34ef56", budgetUsdMonthly: 5 }],
+      ["earn_nudge", {}],
+      ["model_import", { path: "C:\\models\\tiny.gguf" }],
+      ["model_remove_custom", { alias: "custom-tiny" }],
     ]) {
       const result = await client.callTool({ name, arguments: args });
       assert.notEqual(result.isError, true, name);
@@ -363,6 +373,82 @@ test("key management: secret surfaces once on create; budget and revoke hit the 
     assert.deepEqual(JSON.parse(writes[1].body), { budgetUsdMonthly: 5 });
     assert.deepEqual(JSON.parse(writes[2].body), { budgetUsdMonthly: null });
   } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("model import, custom removal, and earn nudge hit the right endpoints", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    const preview = await client.callTool({
+      name: "model_import",
+      arguments: { path: "C:\\models\\tiny.gguf" },
+    });
+    assert.match(JSON.parse(preview.content[0].text).wouldDo, /hash the whole file/i);
+
+    const imported = await client.callTool({
+      name: "model_import",
+      arguments: { path: "C:\\models\\tiny.gguf", label: "Tiny", confirm: true },
+    });
+    assert.equal(JSON.parse(imported.content[0].text).done, false);
+
+    await client.callTool({
+      name: "model_remove_custom",
+      arguments: { alias: "custom-tiny", confirm: true },
+    });
+    await client.callTool({ name: "earn_nudge", arguments: { confirm: true } });
+
+    const writes = node.requests.filter((r) => r.method !== "GET");
+    assert.deepEqual(
+      writes.map((r) => `${r.method} ${r.path}`),
+      [
+        "POST /core/models/import",
+        "DELETE /core/models/custom/custom-tiny",
+        "POST /core/earn/nudge",
+      ],
+    );
+    assert.deepEqual(JSON.parse(writes[0].body), { path: "C:\\models\\tiny.gguf", label: "Tiny" });
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("nodes_status flags stale nodes against the latest release, fail-soft offline", async () => {
+  const node = await startFakeNode({
+    routes: {
+      "/releases/latest": {
+        status: 200,
+        body: {
+          tag_name: "v9.9.9",
+          html_url: "https://example.test/releases/v9.9.9",
+          published_at: "2026-08-16T00:00:00Z",
+        },
+      },
+    },
+  });
+  const { client, close } = await connect({ desktop: node.url });
+  delete process.env.KOINOS_AI_NO_VERSION_CHECK;
+  process.env.KOINOS_AI_RELEASES_URL = `${node.url}/releases/latest`;
+  try {
+    const result = await client.callTool({ name: "nodes_status", arguments: {} });
+    const data = JSON.parse(result.content[0].text);
+    assert.equal(data.latestRelease.version, "9.9.9");
+    assert.equal(data.nodes[0].version, "0.23.3");
+    assert.equal(data.nodes[0].updateAvailable, true);
+
+    // Release feed unreachable → the check goes quiet, nothing degrades.
+    process.env.KOINOS_AI_RELEASES_URL = "http://127.0.0.1:1/latest";
+    const offline = await client.callTool({ name: "nodes_status", arguments: {} });
+    const offlineData = JSON.parse(offline.content[0].text);
+    assert.equal("latestRelease" in offlineData, false);
+    assert.equal("updateAvailable" in offlineData.nodes[0], false);
+    assert.equal(offlineData.nodes[0].reachable, true);
+  } finally {
+    process.env.KOINOS_AI_NO_VERSION_CHECK = "1";
+    delete process.env.KOINOS_AI_RELEASES_URL;
     await close();
     await node.close();
   }

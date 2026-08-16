@@ -27,7 +27,11 @@ already OpenAI-compatible, so every existing client can use it directly.
 - `src/nodes.js` — client pool; resolves the optional `node` tool argument
 - `src/client.js` — HTTP client; the API key lives in a private field and is asserted
   (by test) never to appear in error messages
-- `src/tools.js` — the tool registry: 13 read-only + 13 confirm-gated mutating tools
+- `src/tools.js` — the tool registry: 13 read-only + 16 confirm-gated mutating tools
+- `src/release.js` — GitHub latest-release lookup for the `nodes_status` update
+  check: cached 10 min, fail-soft, 3s timeout; the server's ONLY outbound call
+  beyond the configured nodes (`KOINOS_AI_NO_VERSION_CHECK=1` disables,
+  `KOINOS_AI_RELEASES_URL` overrides for tests)
 - `src/server.js` — MCP wiring (low-level `Server`, plain JSON Schema, no extra deps)
 - `test/fake-node.js` — a fake `/core/*` node whose response shapes mirror real
   observed output from a live app; tests run `node --test`, no framework
@@ -86,13 +90,18 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       now reads the assistant's answer back from `lastChatId` (run is awaited
       upstream — no polling), fail-soft on the stale-chat-index quirk.
 
-Test suite: 28 green via `npm test`.
+- [x] M7 — `model_import` + `model_remove_custom` (BYO GGUF; import is job-based,
+      file referenced in place; shapes from v0.25.8 model-manager.js, note the
+      nested 400 error shape); `earn_nudge` (post-standby scheduler re-register);
+      `nodes_status` update check against the latest GitHub release (fail-soft,
+      cached, opt-out via `KOINOS_AI_NO_VERSION_CHECK=1` — live-verified
+      2026-08-16: reported 0.25.8/up-to-date). Import/remove/nudge deliberately
+      not live-probed (no spare GGUF; nudge needs a wallet).
+
+Test suite: 30 green via `npm test`.
 
 ## Ideas / backlog
 
-- `model_import` wrapper (BYO GGUF, job-based) — `POST /core/models/import`.
-- Version check in `nodes_status` against the latest GitHub release (0.23.3→0.25.8
-  jump happened mid-session; nodes drift).
 - npm publish for one-command install.
 - Upstream contribution candidates, in their repo not this one: CORS headers on the
   gateway (currently absent, blocks browser clients), an embedding model catalog entry
