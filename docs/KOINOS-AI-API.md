@@ -136,7 +136,23 @@ tool strips it). `GET /core/chats/<id>` → `{ ok, chat: {id, title, renamed, cr
 updatedAt, messages: [{role, content}]} }`.
 
 `GET /core/keys` → `{ ok, required, keys: [] }` — `required: false` on a fresh
-install, which is why the whole surface answers unauthenticated.
+install, which is why the whole surface answers unauthenticated. On 0.25.x each
+listed key carries `{id, name, createdAt, lastUsedAt, budgetUsdMonthly, usage:
+{requests, inTok, outTok, costUsd}}` — usage resets per calendar month
+(keys.js `list()` @ v0.25.8).
+
+## Observed live responses (v0.25.8, 2026-08-16)
+
+`GET /core/network/models` → `{ ok, workersOnline, models: [{model, providers}] }`
+— what the network can serve right now, e.g. `koinos-fast` from 3 providers,
+`qwen25-32b` from 1.
+
+`GET /core/network/status` → richer than first noted: `{ ok, reachable, instance,
+bootAt, workersOnline, models, recentOffline: [], workers: [], queueDepth,
+pendingJobs }`. Each worker: `{address, models, lastSeenSecs, busy,
+perf: {jobs, tokPerSec, cuRating}, jobsThisEpoch}` — `address` arrives
+pre-truncated by the scheduler (`1AUgCZ…AXHo`), so relaying it leaks nothing.
+`instance`/`bootAt` change when the scheduler restarts.
 
 Mutating shapes (confirmed from upstream source, not probing):
 
@@ -153,6 +169,18 @@ Mutating shapes (confirmed from upstream source, not probing):
 - Wallet family (`/core/earn/wallet[.../restore|/reveal]`, `unlock`, `lock`, `deposit`)
   — POST-only, password-guarded upstream; reveal requires the password every time even
   while unlocked. All unwrapped, per policy.
+- Keys (gateway.js + keys.js @ v0.25.8): `POST /core/keys` `{name}` →
+  `{ok, id, name, secret}` — the plaintext `kai_sk_…` secret appears exactly once,
+  at creation; only a SHA-256 digest is stored. Creating the FIRST key flips `/v1/*`
+  from open localhost access to required bearer auth. `DELETE /core/keys/<id>` →
+  `{ok, revoked: true}`. `POST /core/keys/<id>/budget` `{budgetUsdMonthly}` →
+  `{ok, id, budgetUsdMonthly}` — `null`/`""` clears the cap, negatives clamp to 0,
+  non-numbers 400. The budget caps NETWORK spend only (local inference is metered
+  at zero cost and never gated); an exhausted key 429s before tokens are bought.
+- `POST /core/tasks/<id>/run` is `await`ed upstream (`gateway.js`:
+  `await this.tasks.runNow(id)`) — when the 200 arrives, the run has finished and
+  `task.lastChatId` already points at the result chat. No polling needed to read
+  the answer back; see the queueing quirk below before ever retrying one.
 
 Route quirks (v0.23.3; re-checked on v0.25.8 — read shapes unchanged):
 

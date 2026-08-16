@@ -27,7 +27,7 @@ already OpenAI-compatible, so every existing client can use it directly.
 - `src/nodes.js` — client pool; resolves the optional `node` tool argument
 - `src/client.js` — HTTP client; the API key lives in a private field and is asserted
   (by test) never to appear in error messages
-- `src/tools.js` — the tool registry: 11 read-only + 10 confirm-gated mutating tools
+- `src/tools.js` — the tool registry: 13 read-only + 13 confirm-gated mutating tools
 - `src/server.js` — MCP wiring (low-level `Server`, plain JSON Schema, no extra deps)
 - `test/fake-node.js` — a fake `/core/*` node whose response shapes mirror real
   observed output from a live app; tests run `node --test`, no framework
@@ -59,6 +59,10 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
   touch key material, move funds, or repoint the node at a different scheduler.
 - Mutating tools carry blunt descriptions and MCP tool annotations
   (`readOnlyHint`/`destructiveHint`).
+- `key_create` necessarily returns the new key's plaintext secret once — the only
+  moment it exists in the clear. The description tells the agent to relay it to the
+  user and never store it, and the preview warns when the FIRST key is about to
+  flip `/v1/*` from open localhost access to required auth.
 
 ## Status
 
@@ -74,20 +78,18 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       gained PATCH + per-request timeout override (task_run_now floors at 120s —
       runs queue behind model swaps, see API doc quirks). Endpoints live-verified
       on app v0.25.8 (2026-08-16); route table re-read from the v0.25.8 source.
+- [x] M6 (second slice) — network read tools (`network_models`, `network_overview`,
+      live-verified on v0.25.8, 2026-08-16); key management (`key_create` /
+      `key_revoke` / `key_set_budget`, confirm-gated, shapes read from v0.25.8
+      keys.js — create's preview warns that the FIRST key flips /v1/* to required
+      auth; writes deliberately not live-probed for that reason); `task_run_now`
+      now reads the assistant's answer back from `lastChatId` (run is awaited
+      upstream — no polling), fail-soft on the stale-chat-index quirk.
 
-Test suite: 25 green via `npm test`.
+Test suite: 28 green via `npm test`.
 
 ## Ideas / backlog
 
-- Network read tools (`GET /core/network/status`, `/core/network/models` — new in
-  0.25.x): computers online, per-provider rows, what the network can serve. Read-only,
-  demo-friendly.
-- Key management with budgets: `key_create`, `key_revoke`, `key_set_budget`
-  (`POST /core/keys/<id>/budget {budgetUsdMonthly}`, new in 0.25.x — spec §34
-  spending limits shipped). Confirm-gated.
-- `task_run_now` returning the answer: poll until `lastChatId` updates, fetch the
-  chat, return the assistant reply (runs queue behind model loads — don't retry,
-  duplicates result).
 - `model_import` wrapper (BYO GGUF, job-based) — `POST /core/models/import`.
 - Version check in `nodes_status` against the latest GitHub release (0.23.3→0.25.8
   jump happened mid-session; nodes drift).

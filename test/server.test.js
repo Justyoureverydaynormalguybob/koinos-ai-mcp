@@ -47,9 +47,14 @@ test("tools/list exposes the full read surface", async () => {
       "earn_status",
       "earn_stop",
       "health",
+      "key_create",
+      "key_revoke",
+      "key_set_budget",
       "keys_list",
       "model_ensure",
       "models_list",
+      "network_models",
+      "network_overview",
       "network_set_privacy_mode",
       "network_status",
       "nodes_status",
@@ -128,6 +133,8 @@ test("read tools return live node data", async () => {
     for (const [name, probe] of [
       ["earn_status", (d) => d.worker.running === false],
       ["network_status", (d) => d.privacyMode === "local-only"],
+      ["network_models", (d) => d.workersOnline === 3 && d.models.length === 3],
+      ["network_overview", (d) => d.reachable === true && d.workers[0].perf.jobs === 26],
       ["tasks_list", (d) => Array.isArray(d.tasks)],
       ["docs_list", (d) => Array.isArray(d.docs)],
       ["keys_list", (d) => d.required === false],
@@ -156,6 +163,9 @@ test("mutating tools without confirm change nothing and return a preview", async
       ["task_set_enabled", { id: "t123", enabled: false }],
       ["chat_rename", { id: "chat1", title: "new title" }],
       ["chat_delete", { id: "chat1" }],
+      ["key_create", { name: "ci" }],
+      ["key_revoke", { id: "key_ab12cd34ef56" }],
+      ["key_set_budget", { id: "key_ab12cd34ef56", budgetUsdMonthly: 5 }],
     ]) {
       const result = await client.callTool({ name, arguments: args });
       assert.notEqual(result.isError, true, name);
@@ -250,6 +260,108 @@ test("task_run_now outlives the general request timeout (runs can involve a mode
     });
     assert.notEqual(result.isError, true, result.content?.[0]?.text);
     assert.equal(JSON.parse(result.content[0].text).task.lastChatId, "chat1");
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("task_run_now reads the assistant's answer back from the run's chat", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    const result = await client.callTool({
+      name: "task_run_now",
+      arguments: { id: "t123", confirm: true },
+    });
+    assert.notEqual(result.isError, true, result.content?.[0]?.text);
+    const data = JSON.parse(result.content[0].text);
+    assert.equal(data.task.lastChatId, "chat1");
+    assert.equal(data.answer, "hi there");
+    assert.ok(node.requests.some((r) => r.method === "GET" && r.path === "/core/chats/chat1"));
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("task_run_now is fail-soft when the run's chat can't be read back", async () => {
+  const node = await startFakeNode({
+    routes: {
+      "POST /core/tasks/t123/run": {
+        status: 200,
+        body: { ok: true, task: { id: "t123", lastChatId: "ghost" } },
+      },
+    },
+  });
+  const { client, close } = await connect(node.url);
+  try {
+    const result = await client.callTool({
+      name: "task_run_now",
+      arguments: { id: "t123", confirm: true },
+    });
+    // The run succeeded; a lagging chat index must not turn it into an error.
+    assert.notEqual(result.isError, true, result.content?.[0]?.text);
+    const data = JSON.parse(result.content[0].text);
+    assert.equal(data.answer, null);
+    assert.match(data.answerHint, /chat_get/);
+    assert.match(data.answerHint, /Do not run the task again/);
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("key management: secret surfaces once on create; budget and revoke hit the node", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    // With zero keys on the node, the preview warns about the auth flip.
+    const preview = await client.callTool({ name: "key_create", arguments: { name: "ci" } });
+    const previewData = JSON.parse(preview.content[0].text);
+    assert.equal(previewData.executed, false);
+    assert.match(previewData.wouldDo, /FIRST key/);
+    assert.match(previewData.wouldDo, /exactly once/);
+
+    const created = await client.callTool({
+      name: "key_create",
+      arguments: { name: "ci", confirm: true },
+    });
+    assert.equal(JSON.parse(created.content[0].text).secret, "kai_sk_test-shown-once");
+
+    await client.callTool({
+      name: "key_set_budget",
+      arguments: { id: "key_ab12cd34ef56", budgetUsdMonthly: 5, confirm: true },
+    });
+    await client.callTool({
+      name: "key_set_budget",
+      arguments: { id: "key_ab12cd34ef56", budgetUsdMonthly: null, confirm: true },
+    });
+    const bogus = await client.callTool({
+      name: "key_set_budget",
+      arguments: { id: "key_ab12cd34ef56", budgetUsdMonthly: "five", confirm: true },
+    });
+    assert.equal(bogus.isError, true);
+    assert.match(bogus.content[0].text, /non-negative number/);
+
+    await client.callTool({
+      name: "key_revoke",
+      arguments: { id: "key_ab12cd34ef56", confirm: true },
+    });
+
+    const writes = node.requests.filter((r) => r.method !== "GET");
+    assert.deepEqual(
+      writes.map((r) => `${r.method} ${r.path}`),
+      [
+        "POST /core/keys",
+        "POST /core/keys/key_ab12cd34ef56/budget",
+        "POST /core/keys/key_ab12cd34ef56/budget",
+        "DELETE /core/keys/key_ab12cd34ef56",
+      ],
+    );
+    assert.deepEqual(JSON.parse(writes[0].body), { name: "ci" });
+    assert.deepEqual(JSON.parse(writes[1].body), { budgetUsdMonthly: 5 });
+    assert.deepEqual(JSON.parse(writes[2].body), { budgetUsdMonthly: null });
   } finally {
     await close();
     await node.close();

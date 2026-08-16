@@ -108,6 +108,27 @@ export const tools = [
     handler: (client) => client.get("/core/network"),
   },
   {
+    name: "network_models",
+    description:
+      "List what the Koinos compute network can serve right now (read-only): " +
+      "workers online and each network-servable model with its provider " +
+      "count. Served from a short upstream cache and fail-soft — an " +
+      "unreachable scheduler yields an empty list, not an error.",
+    inputSchema: NO_INPUT,
+    handler: (client) => client.get("/core/network/models"),
+  },
+  {
+    name: "network_overview",
+    description:
+      "Live view of the Koinos compute network as seen from this node " +
+      "(read-only): scheduler reachability, workers online with the models " +
+      "each serves, recent performance (jobs, tok/s, compute rating), queue " +
+      "depth and pending jobs. Worker addresses arrive pre-truncated by the " +
+      "scheduler, so nothing identifying is exposed.",
+    inputSchema: NO_INPUT,
+    handler: (client) => client.get("/core/network/status"),
+  },
+  {
     name: "tasks_list",
     description:
       "List scheduled tasks configured on the Koinos AI node (read-only).",
@@ -158,8 +179,9 @@ export const tools = [
     name: "keys_list",
     description:
       "List API keys registered on the Koinos AI node (read-only). Returns " +
-      "key metadata and whether auth is required for /v1/* — keys are hashed " +
-      "at rest upstream; no secret material is available or returned.",
+      "key metadata, per-key monthly usage (requests, tokens, network cost) " +
+      "and budget cap, and whether auth is required for /v1/* — keys are " +
+      "hashed at rest upstream; no secret material is available or returned.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/keys"),
   },
@@ -371,7 +393,10 @@ export const tools = [
     name: "task_run_now",
     description:
       "MUTATING — runs a scheduled task immediately (local inference on this " +
-      "machine; the result lands in chat history). Requires confirm: true.",
+      "machine; the result lands in chat history) and returns the " +
+      "assistant's answer when it can be read back. Never retry a run that " +
+      "timed out — the node queues it and a retry produces duplicate runs. " +
+      "Requires confirm: true.",
     annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
@@ -383,15 +408,40 @@ export const tools = [
       required: ["id"],
       additionalProperties: false,
     },
-    handler: (client, args) =>
-      confirmGate(args, `Run task ${args.id} now.`) ??
-      client.post(`/core/tasks/${requireId(args)}/run`, {}, {
+    handler: async (client, args) => {
+      const preview = confirmGate(args, `Run task ${args.id} now.`);
+      if (preview) return preview;
+      const result = await client.post(`/core/tasks/${requireId(args)}/run`, {}, {
         // A run is synchronous inference and may first swap the loaded model;
         // the node drops the run if the client disconnects first (observed
         // live 2026-08-16 at the 10s default). Floor, not replacement — a
         // larger configured timeout still wins.
         timeoutMs: Math.max(client.timeoutMs, RUN_TIMEOUT_MS),
-      }),
+      });
+      // The run is awaited upstream, so lastChatId already points at the
+      // result chat. Read the answer back, fail-soft: the chat index can lag
+      // (see API doc quirks) and the run itself has already succeeded.
+      const chatId = result?.task?.lastChatId;
+      if (typeof chatId !== "string" || chatId === "") return result;
+      try {
+        const data = await client.get(`/core/chats/${encodeURIComponent(chatId)}`);
+        const messages = data?.chat?.messages;
+        const reply = Array.isArray(messages)
+          ? messages.findLast((m) => m?.role === "assistant")?.content
+          : undefined;
+        if (typeof reply === "string") return { ...result, answer: reply };
+      } catch {
+        // Fall through to the hint below.
+      }
+      return {
+        ...result,
+        answer: null,
+        answerHint:
+          `The run finished but chat ${chatId} could not be read back yet ` +
+          "(the node's chat index can lag). Try chat_get with that id. Do " +
+          "not run the task again — that would duplicate the run.",
+      };
+    },
   },
   {
     name: "task_delete",
@@ -475,5 +525,118 @@ export const tools = [
     handler: (client, args) =>
       confirmGate(args, `Permanently delete chat ${args.id} and its transcript.`) ??
       client.delete(`/core/chats/${requireId(args)}`),
+  },
+  {
+    name: "key_create",
+    description:
+      "MUTATING — creates a named API key for the node's OpenAI-compatible " +
+      "/v1/* gateway. The response contains the key secret exactly once " +
+      "(only a hash is stored upstream; it can never be retrieved again) — " +
+      "relay it to the user immediately and never store or log it. Creating " +
+      "the node's FIRST key switches /v1/* from open localhost access to " +
+      "required bearer auth: keyless clients start getting 401s. Requires " +
+      "confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "A label for the key, e.g. 'vscode'" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["name"],
+      additionalProperties: false,
+    },
+    handler: async (client, args) => {
+      const name = String(args.name ?? "").trim();
+      if (!name) throw new Error("Missing required argument: name (non-empty string)");
+      if (args.confirm !== true) {
+        let firstKey = false;
+        try {
+          const current = await client.get("/core/keys");
+          firstKey = Array.isArray(current?.keys) && current.keys.length === 0;
+        } catch {
+          // Node unreadable right now — the preview just stays generic.
+        }
+        return confirmGate(
+          args,
+          `Create API key "${name}". The response will contain the key ` +
+            "secret exactly once — relay it to the user, never store it." +
+            (firstKey
+              ? " This is the node's FIRST key: /v1/* switches from open " +
+                "localhost access to required bearer auth, and keyless " +
+                "clients start getting 401s."
+              : ""),
+        );
+      }
+      return client.post("/core/keys", { name });
+    },
+  },
+  {
+    name: "key_revoke",
+    description:
+      "MUTATING and DESTRUCTIVE — permanently revokes an API key by id. " +
+      "Clients using it start getting 401s immediately; there is no undo. " +
+      "Revoking the LAST key returns /v1/* to open, unauthenticated " +
+      "localhost access. Requires confirm: true.",
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The key id (from keys_list)" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(
+        args,
+        `Permanently revoke API key ${args.id}. Clients using it get 401s ` +
+          "immediately; revoking the last key reopens /v1/* unauthenticated.",
+      ) ?? client.delete(`/core/keys/${requireId(args)}`),
+  },
+  {
+    name: "key_set_budget",
+    description:
+      "MUTATING — sets or clears an API key's monthly USD spending cap for " +
+      "paid Koinos-network inference (upstream spec §34 spending limits). " +
+      "Local inference is free and never gated by this. A key at its cap " +
+      "gets 429s on network requests until the cap is raised or the month " +
+      "rolls over. Pass budgetUsdMonthly: null to remove the cap. Requires " +
+      "confirm: true.",
+    annotations: { readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The key id (from keys_list)" },
+        budgetUsdMonthly: {
+          type: ["number", "null"],
+          description: "Monthly cap in USD (≥ 0), or null to remove the cap",
+        },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["id", "budgetUsdMonthly"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      const budget = args.budgetUsdMonthly ?? null;
+      if (budget !== null && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0)) {
+        throw new Error(
+          "budgetUsdMonthly must be a non-negative number of USD, or null to clear the cap",
+        );
+      }
+      return (
+        confirmGate(
+          args,
+          budget === null
+            ? `Remove the monthly network-spend cap on API key ${args.id}.`
+            : `Cap API key ${args.id} at $${budget}/month of network spend ` +
+              "(local inference stays free and ungated).",
+        ) ?? client.post(`/core/keys/${requireId(args)}/budget`, { budgetUsdMonthly: budget })
+      );
+    },
   },
 ];

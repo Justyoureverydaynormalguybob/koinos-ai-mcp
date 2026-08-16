@@ -52,6 +52,39 @@ export const FAKE_NETWORK = {
   schedulerUrl: "https://koinosai.com/scheduler",
   walletUnlocked: false,
 };
+// Shapes observed live on v0.25.8 (2026-08-16). Both endpoints are fail-soft
+// upstream: scheduler unreachable → empty models/workers, not an error.
+export const FAKE_NETWORK_MODELS = {
+  ok: true,
+  workersOnline: 3,
+  models: [
+    { model: "koinos-fast", providers: 3 },
+    { model: "koinos-balanced", providers: 2 },
+    { model: "qwen25-32b", providers: 1 },
+  ],
+};
+export const FAKE_NETWORK_OVERVIEW = {
+  ok: true,
+  reachable: true,
+  instance: "i_50e07d94",
+  bootAt: "2026-08-16T08:22:43.428Z",
+  workersOnline: 3,
+  models: FAKE_NETWORK_MODELS.models,
+  recentOffline: [],
+  workers: [
+    {
+      // Addresses arrive pre-truncated by the scheduler.
+      address: "1AUgCZ…AXHo",
+      models: ["koinos-fast", "qwen25-32b"],
+      lastSeenSecs: 4,
+      busy: false,
+      perf: { jobs: 26, tokPerSec: 3.83, cuRating: 0.192 },
+      jobsThisEpoch: 4,
+    },
+  ],
+  queueDepth: 0,
+  pendingJobs: 0,
+};
 export const FAKE_CHAT = {
   id: "chat1",
   title: "hello",
@@ -94,6 +127,8 @@ export function startFakeNode({ routes } = {}) {
       "/core/models": { status: 200, body: FAKE_MODELS },
       "/core/earn": { status: 200, body: FAKE_EARN },
       "/core/network": { status: 200, body: FAKE_NETWORK },
+      "/core/network/models": { status: 200, body: FAKE_NETWORK_MODELS },
+      "/core/network/status": { status: 200, body: FAKE_NETWORK_OVERVIEW },
       "/core/tasks": { status: 200, body: { ok: true, tasks: [] } },
       "/core/chats": { status: 200, body: FAKE_CHATS },
       "/core/chats/chat1": { status: 200, body: { ok: true, chat: FAKE_CHAT } },
@@ -112,7 +147,10 @@ export function startFakeNode({ routes } = {}) {
       "POST /core/tasks": { status: 200, body: { ok: true, task: { id: "t123", name: "morning" } } },
       "POST /core/tasks/t123/run": {
         status: 200,
-        body: { ok: true, task: { id: "t123", lastRunAt: "2026-08-15T23:59:00.000Z" } },
+        body: {
+          ok: true,
+          task: { id: "t123", lastRunAt: "2026-08-15T23:59:00.000Z", lastChatId: "chat1" },
+        },
       },
       "DELETE /core/tasks/t123": { status: 200, body: { ok: true, removed: true } },
       "PATCH /core/tasks/t123": {
@@ -121,6 +159,16 @@ export function startFakeNode({ routes } = {}) {
       },
       "PATCH /core/chats/chat1": { status: 200, body: { ok: true, id: "chat1", title: "renamed" } },
       "DELETE /core/chats/chat1": { status: 200, body: { ok: true } },
+      // Key management (0.25.x): create returns the plaintext secret once.
+      "POST /core/keys": {
+        status: 200,
+        body: { ok: true, id: "key_ab12cd34ef56", name: "ci", secret: "kai_sk_test-shown-once" },
+      },
+      "DELETE /core/keys/key_ab12cd34ef56": { status: 200, body: { ok: true, revoked: true } },
+      "POST /core/keys/key_ab12cd34ef56/budget": {
+        status: 200,
+        body: { ok: true, id: "key_ab12cd34ef56", budgetUsdMonthly: 5 },
+      },
       ...routes,
     };
     const route = table[`${req.method} ${req.url}`] ?? table[req.url];

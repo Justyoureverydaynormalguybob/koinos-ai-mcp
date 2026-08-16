@@ -3,8 +3,9 @@
 An [MCP](https://modelcontextprotocol.io) server for [Koinos AI](https://koinosai.com) —
 operate a Koinos AI node from Claude Code, or any MCP client.
 
-> **Status: working.** Full read surface plus guarded write surface (earning, privacy
-> mode, models, scheduled tasks), verified against a live node (app v0.23.3). See
+> **Status: working.** Full read surface (node, earnings, compute network) plus guarded
+> write surface (earning, privacy mode, models, scheduled tasks, chats, API keys with
+> spending caps), verified against a live node (app v0.25.8). See
 > [`CLAUDE.md`](CLAUDE.md) for the build plan.
 
 ## Why
@@ -81,6 +82,8 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `models_list` | read-only | Model alias catalog with package pins, sizes, licenses, per-alias status |
 | `earn_status` | read-only | Earn worker state, jobs, receipts, earnings, wallet summary (never key material) |
 | `network_status` | read-only | Privacy mode, scheduler URL, wallet lock state |
+| `network_models` | read-only | What the compute network can serve right now, with provider counts |
+| `network_overview` | read-only | Live network view: workers online, per-worker models + perf, queue depth |
 | `tasks_list` | read-only | Scheduled tasks |
 | `chats_list` | read-only | Chat list (transcripts omitted for brevity) |
 | `chat_get` | read-only | One chat with the full transcript |
@@ -89,8 +92,9 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `earn_start` / `earn_stop` | **mutating** | Start/stop selling idle compute for KAI |
 | `network_set_privacy_mode` | **mutating** | Change privacy posture (local-only / local-first / network) |
 | `model_ensure` | **mutating** | Download+load a model by alias; without `confirm` it just reports the size |
-| `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts (pause/resume included) |
+| `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts; `task_run_now` returns the model's answer |
 | `chat_rename` / `chat_delete` | **mutating** | Rename or permanently delete a chat conversation |
+| `key_create` / `key_revoke` / `key_set_budget` | **mutating** | API keys for `/v1/*`, with per-key monthly network spending caps |
 
 Every mutating tool requires `confirm: true`. Called without it, **nothing changes** —
 the tool returns a preview of what would happen, so an agent must state intent before
@@ -143,6 +147,10 @@ A ~3-minute recording script covering all of this lives in
   destructive via MCP tool annotations.
 - No API keys or wallet material are logged or persisted by this server; the node's
   API key lives in a private field and is asserted (by test) never to appear in errors.
+- `key_create` is the one place a secret passes through: the node returns the new
+  key's plaintext exactly once (only a hash is stored). The tool tells the agent to
+  hand it straight to the user, and its preview warns before the **first** key flips
+  `/v1/*` from open localhost access to required bearer auth.
 
 ## Relationship to the Koinos AI project
 
