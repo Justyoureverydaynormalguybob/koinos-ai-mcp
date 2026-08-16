@@ -37,7 +37,9 @@ test("tools/list exposes the full read surface", async () => {
     const { tools: listed } = await client.listTools();
     const names = listed.map((t) => t.name).sort();
     assert.deepEqual(names, [
+      "chat_delete",
       "chat_get",
+      "chat_rename",
       "chats_list",
       "doc_get",
       "docs_list",
@@ -54,6 +56,7 @@ test("tools/list exposes the full read surface", async () => {
       "task_create",
       "task_delete",
       "task_run_now",
+      "task_set_enabled",
       "tasks_list",
     ]);
     for (const t of listed) {
@@ -150,6 +153,9 @@ test("mutating tools without confirm change nothing and return a preview", async
       ["task_create", { name: "n", prompt: "p", model: "koinos-fast", schedule: { kind: "daily" } }],
       ["task_run_now", { id: "t123" }],
       ["task_delete", { id: "t123" }],
+      ["task_set_enabled", { id: "t123", enabled: false }],
+      ["chat_rename", { id: "chat1", title: "new title" }],
+      ["chat_delete", { id: "chat1" }],
     ]) {
       const result = await client.callTool({ name, arguments: args });
       assert.notEqual(result.isError, true, name);
@@ -188,6 +194,15 @@ test("with confirm: true the writes fire with the right method, path, and body",
       },
     });
     await client.callTool({ name: "task_delete", arguments: { id: "t123", confirm: true } });
+    await client.callTool({
+      name: "task_set_enabled",
+      arguments: { id: "t123", enabled: false, confirm: true },
+    });
+    await client.callTool({
+      name: "chat_rename",
+      arguments: { id: "chat1", title: "renamed", confirm: true },
+    });
+    await client.callTool({ name: "chat_delete", arguments: { id: "chat1", confirm: true } });
 
     const writes = node.requests.filter((r) => r.method !== "GET");
     assert.deepEqual(
@@ -197,6 +212,9 @@ test("with confirm: true the writes fire with the right method, path, and body",
         "POST /core/network/config",
         "POST /core/tasks",
         "DELETE /core/tasks/t123",
+        "PATCH /core/tasks/t123",
+        "PATCH /core/chats/chat1",
+        "DELETE /core/chats/chat1",
       ],
     );
     assert.deepEqual(JSON.parse(writes[1].body), { privacyMode: "local-first" });
@@ -206,6 +224,8 @@ test("with confirm: true the writes fire with the right method, path, and body",
       model: "koinos-fast",
       schedule: { kind: "daily", hour: 7 },
     });
+    assert.deepEqual(JSON.parse(writes[4].body), { enabled: false });
+    assert.deepEqual(JSON.parse(writes[5].body), { title: "renamed" });
   } finally {
     await close();
     await node.close();

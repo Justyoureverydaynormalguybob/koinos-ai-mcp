@@ -38,6 +38,10 @@ export class KoinosAiClient {
     return this.#request("POST", path, body, opts);
   }
 
+  async patch(path, body, opts) {
+    return this.#request("PATCH", path, body, opts);
+  }
+
   async delete(path, opts) {
     return this.#request("DELETE", path, undefined, opts);
   }

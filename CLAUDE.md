@@ -27,7 +27,7 @@ already OpenAI-compatible, so every existing client can use it directly.
 - `src/nodes.js` — client pool; resolves the optional `node` tool argument
 - `src/client.js` — HTTP client; the API key lives in a private field and is asserted
   (by test) never to appear in error messages
-- `src/tools.js` — the tool registry: 11 read-only + 7 confirm-gated mutating tools
+- `src/tools.js` — the tool registry: 11 read-only + 10 confirm-gated mutating tools
 - `src/server.js` — MCP wiring (low-level `Server`, plain JSON Schema, no extra deps)
 - `test/fake-node.js` — a fake `/core/*` node whose response shapes mirror real
   observed output from a live app; tests run `node --test`, no framework
@@ -70,13 +70,27 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
 - [x] M4 — multi-node: `KOINOS_AI_NODES`, per-tool `node` arg, `nodes_status`
       aggregate with per-node degradation (2026-08-16)
 - [x] Docs: README with real captured transcripts; `docs/DEMO.md` recording script
+- [x] M6 (first slice) — `chat_delete`, `chat_rename`, `task_set_enabled`; client
+      gained PATCH + per-request timeout override (task_run_now floors at 120s —
+      runs queue behind model swaps, see API doc quirks). Endpoints live-verified
+      on app v0.25.8 (2026-08-16); route table re-read from the v0.25.8 source.
 
 Test suite: 25 green via `npm test`.
 
 ## Ideas / backlog
 
-- `chat_delete` (endpoint live-verified), `task_enable`/`task_disable`
-  (`PATCH /core/tasks/<id> {enabled}` exists upstream).
+- Network read tools (`GET /core/network/status`, `/core/network/models` — new in
+  0.25.x): computers online, per-provider rows, what the network can serve. Read-only,
+  demo-friendly.
+- Key management with budgets: `key_create`, `key_revoke`, `key_set_budget`
+  (`POST /core/keys/<id>/budget {budgetUsdMonthly}`, new in 0.25.x — spec §34
+  spending limits shipped). Confirm-gated.
+- `task_run_now` returning the answer: poll until `lastChatId` updates, fetch the
+  chat, return the assistant reply (runs queue behind model loads — don't retry,
+  duplicates result).
+- `model_import` wrapper (BYO GGUF, job-based) — `POST /core/models/import`.
+- Version check in `nodes_status` against the latest GitHub release (0.23.3→0.25.8
+  jump happened mid-session; nodes drift).
 - npm publish for one-command install.
 - Upstream contribution candidates, in their repo not this one: CORS headers on the
   gateway (currently absent, blocks browser clients), an embedding model catalog entry

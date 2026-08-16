@@ -115,6 +115,12 @@ export function startFakeNode({ routes } = {}) {
         body: { ok: true, task: { id: "t123", lastRunAt: "2026-08-15T23:59:00.000Z" } },
       },
       "DELETE /core/tasks/t123": { status: 200, body: { ok: true, removed: true } },
+      "PATCH /core/tasks/t123": {
+        status: 200,
+        body: { ok: true, task: { id: "t123", enabled: false } },
+      },
+      "PATCH /core/chats/chat1": { status: 200, body: { ok: true, id: "chat1", title: "renamed" } },
+      "DELETE /core/chats/chat1": { status: 200, body: { ok: true } },
       ...routes,
     };
     const route = table[`${req.method} ${req.url}`] ?? table[req.url];

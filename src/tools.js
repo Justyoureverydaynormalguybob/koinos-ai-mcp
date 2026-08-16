@@ -413,4 +413,67 @@ export const tools = [
       confirmGate(args, `Permanently delete task ${args.id}.`) ??
       client.delete(`/core/tasks/${requireId(args)}`),
   },
+  {
+    name: "task_set_enabled",
+    description:
+      "MUTATING — pauses or resumes a scheduled task on the node without " +
+      "deleting it. Re-enabling starts the schedule clock fresh (no burst of " +
+      "missed runs). Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The task id" },
+        enabled: { type: "boolean", description: "true to resume, false to pause" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["id", "enabled"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(args, `${args.enabled ? "Resume" : "Pause"} task ${args.id}.`) ??
+      client.patch(`/core/tasks/${requireId(args)}`, { enabled: args.enabled }),
+  },
+  {
+    name: "chat_rename",
+    description:
+      "MUTATING — renames a chat conversation on the node (max 80 chars; the " +
+      "new title sticks and outlives autosaves). Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The chat id" },
+        title: { type: "string", description: "New title (max 80 chars)" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["id", "title"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(args, `Rename chat ${args.id} to "${args.title}".`) ??
+      client.patch(`/core/chats/${requireId(args)}`, { title: args.title }),
+  },
+  {
+    name: "chat_delete",
+    description:
+      "MUTATING and DESTRUCTIVE — permanently deletes a chat conversation and " +
+      "its transcript from the node. There is no undo. Requires confirm: true.",
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The chat id" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(args, `Permanently delete chat ${args.id} and its transcript.`) ??
+      client.delete(`/core/chats/${requireId(args)}`),
+  },
 ];

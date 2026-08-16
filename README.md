@@ -89,7 +89,8 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `earn_start` / `earn_stop` | **mutating** | Start/stop selling idle compute for KAI |
 | `network_set_privacy_mode` | **mutating** | Change privacy posture (local-only / local-first / network) |
 | `model_ensure` | **mutating** | Download+load a model by alias; without `confirm` it just reports the size |
-| `task_create` / `task_run_now` / `task_delete` | **mutating** | Manage scheduled prompts |
+| `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts (pause/resume included) |
+| `chat_rename` / `chat_delete` | **mutating** | Rename or permanently delete a chat conversation |
 
 Every mutating tool requires `confirm: true`. Called without it, **nothing changes** —
 the tool returns a preview of what would happen, so an agent must state intent before
@@ -138,8 +139,8 @@ A ~3-minute recording script covering all of this lives in
   all** — an agent cannot touch key material or move funds at any confirmation level.
   The scheduler-URL setting is likewise unwrapped (repointing it is security-sensitive).
 - Every mutating tool is confirm-gated (see above) and carries a blunt description of
-  exactly what it changes; `task_delete` is additionally flagged destructive via MCP
-  tool annotations.
+  exactly what it changes; `task_delete` and `chat_delete` are additionally flagged
+  destructive via MCP tool annotations.
 - No API keys or wallet material are logged or persisted by this server; the node's
   API key lives in a private field and is asserted (by test) never to appear in errors.
 
