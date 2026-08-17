@@ -102,7 +102,11 @@ Test suite: 30 green via `npm test`.
 
 ## Ideas / backlog
 
-- npm publish for one-command install.
+- ~~npm publish~~ Done 2026-08-17: `koinos-ai-mcp@0.2.0` live on npm (maintainer
+  `hung0v3r`; publishes need the browser security-key flow, so run `npm publish`
+  from an interactive terminal). `npx -y koinos-ai-mcp` verified on Windows.
+  Next: pitch inclusion in the Koinos AI app's one-click MCP catalog (it pins
+  npm versions, so this was the prerequisite).
 - Upstream contribution candidates, in their repo not this one: CORS headers on the
   gateway (currently absent, blocks browser clients), an embedding model catalog entry
   (`/v1/embeddings` exists with nothing to serve it), tidier 404s for missing chat/doc

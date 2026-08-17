@@ -32,17 +32,10 @@ OpenAI-compatible, so every existing client can use it as-is.
 
 ## Install
 
-Not published to npm yet — run from a checkout:
-
-```sh
-git clone https://github.com/Justyoureverydaynormalguybob/koinos-ai-mcp
-cd koinos-ai-mcp && npm install && npm test
-```
-
 Add to Claude Code:
 
 ```sh
-claude mcp add koinos-ai -- node /path/to/koinos-ai-mcp/src/index.js
+claude mcp add koinos-ai -- npx -y koinos-ai-mcp
 ```
 
 Or in any MCP client config:
@@ -51,13 +44,16 @@ Or in any MCP client config:
 {
   "mcpServers": {
     "koinos-ai": {
-      "command": "node",
-      "args": ["/path/to/koinos-ai-mcp/src/index.js"],
+      "command": "npx",
+      "args": ["-y", "koinos-ai-mcp"],
       "env": { "KOINOS_AI_BASE_URL": "http://127.0.0.1:41100" }
     }
   }
 }
 ```
+
+Or run from a checkout (`git clone`, `npm install && npm test`) and point the client at
+`node /path/to/koinos-ai-mcp/src/index.js` instead.
 
 Configuration (all optional): `KOINOS_AI_BASE_URL` (default `http://127.0.0.1:41100`,
 honours upstream's `KAI_CORE_PORT`), `KOINOS_AI_API_KEY` (sent as a Bearer token when set),
