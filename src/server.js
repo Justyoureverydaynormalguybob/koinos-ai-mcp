@@ -9,18 +9,21 @@ import { tools } from "./tools.js";
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
 
-export function createServer(pool) {
+export function createServer(pool, { compact = false } = {}) {
   const server = new Server(
     { name: "koinos-ai-mcp", version },
     { capabilities: { tools: {} } },
   );
 
+  // With one configured node the `node` argument can never do anything —
+  // compact mode drops it (29 copies of a useless parameter add up).
+  const dropNode = compact && pool.names.length === 1;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map(({ name, description, inputSchema, annotations }) => ({
       name,
-      description,
-      inputSchema,
-      ...(annotations ? { annotations } : {}),
+      description: compact ? compactDescription(description, inputSchema) : description,
+      inputSchema: compact ? compactSchema(inputSchema, dropNode) : inputSchema,
+      ...(annotations && !compact ? { annotations } : {}),
     })),
   }));
 
@@ -49,4 +52,30 @@ function errorResult(message) {
     content: [{ type: "text", text: message }],
     isError: true,
   };
+}
+
+// Compact mode exists for small-context local models (e.g. Koinos AI's own
+// Agent mode on a 4096-token llama.cpp context): full frontier-grade tool
+// descriptions cost ~3.5k tokens across 29 tools and crowd out the actual
+// conversation. Keep the first sentence — plus the confirm contract, which an
+// agent must never lose — and drop per-parameter prose.
+function compactDescription(description, inputSchema) {
+  const first = description.split(/(?<=\.)\s+/)[0];
+  const gated = Boolean(inputSchema?.properties?.confirm);
+  return gated && !/confirm/i.test(first)
+    ? `${first} Requires confirm:true (without it: preview only, no changes).`
+    : first;
+}
+
+function compactSchema(schema, dropNode = false) {
+  if (!schema?.properties) return schema;
+  const properties = Object.fromEntries(
+    Object.entries(schema.properties)
+      .filter(([key]) => !(dropNode && key === "node"))
+      .map(([key, prop]) => {
+        const { description: _dropped, ...rest } = prop;
+        return [key, rest.properties ? compactSchema(rest) : rest];
+      }),
+  );
+  return { ...schema, properties };
 }

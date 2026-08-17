@@ -15,13 +15,13 @@ import { tools } from "../src/tools.js";
 import { startFakeNode, FAKE_MODELS } from "./fake-node.js";
 
 // `nodes`: a name → baseUrl map (or a single URL string for the common case).
-async function connect(nodes, timeoutMs = 10_000) {
+async function connect(nodes, timeoutMs = 10_000, serverOpts = {}) {
   const entries = typeof nodes === "string" ? { local: nodes } : nodes;
   const pool = createPool({
     nodes: Object.entries(entries).map(([name, baseUrl]) => ({ name, baseUrl, timeoutMs })),
     defaultNode: Object.keys(entries)[0],
   });
-  const server = createServer(pool);
+  const server = createServer(pool, serverOpts);
   const client = new Client({ name: "test-client", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -540,6 +540,43 @@ test("multi-node: the node argument targets a specific node; unknown names error
     await close();
     await a.close();
     await b.close();
+  }
+});
+
+test("compact mode shrinks the tool prompt but keeps the confirm contract", async () => {
+  const full = await connect("http://127.0.0.1:1");
+  const slim = await connect("http://127.0.0.1:1", 10_000, { compact: true });
+  try {
+    const { tools: fullTools } = await full.client.listTools();
+    const { tools: slimTools } = await slim.client.listTools();
+    assert.equal(fullTools.length, slimTools.length);
+
+    const fullSize = JSON.stringify(fullTools).length;
+    const slimSize = JSON.stringify(slimTools).length;
+    assert.ok(slimSize < fullSize / 2, `compact ${slimSize} should be < half of ${fullSize}`);
+
+    for (const t of slimTools) {
+      // Behavior is unchanged: names, schema structure, and requireds survive
+      // (single-node compact drops the useless `node` param).
+      const counterpart = fullTools.find((f) => f.name === t.name);
+      assert.deepEqual(
+        Object.keys(t.inputSchema.properties),
+        Object.keys(counterpart.inputSchema.properties).filter((k) => k !== "node"),
+        t.name,
+      );
+      assert.deepEqual(t.inputSchema.required, counterpart.inputSchema.required, t.name);
+      // No parameter prose in compact mode.
+      for (const prop of Object.values(t.inputSchema.properties)) {
+        assert.equal("description" in prop, false, t.name);
+      }
+      // Mutating tools must still state the confirm contract.
+      if (t.inputSchema.properties.confirm) {
+        assert.match(t.description, /confirm/i, t.name);
+      }
+    }
+  } finally {
+    await full.close();
+    await slim.close();
   }
 });
 
