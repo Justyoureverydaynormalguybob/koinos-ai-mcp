@@ -100,6 +100,16 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
 
 Test suite: 30 green via `npm test`.
 
+- [x] M8 — the embedded Koinos blockchain node (app v0.28+, `POST /core/koinos/rpc`
+      channel dispatch). 7 read tools (status, setup, dashboard, balances, reburn,
+      producer, logs) + 4 confirm-gated (start, stop, quick-sync with a
+      size/disk-surfacing preview — observed 63.5 GB archive / 165 GB required —
+      and chain_burn with a max-burn preview and IRREVERSIBLE labelling). The
+      value-moving channels (chain send, fund sends, bridges, swaps, onramp) are
+      never wrapped; a test greps tools.js for those channel names to enforce it.
+      Node tools inherit the app's server-side privacy gate (refused in local-only).
+      Live-verified on v0.28.4 against a real wallet (2026-08-18). 40 tools, 33 tests.
+
 ## Ideas / backlog
 
 - ~~npm publish~~ Done 2026-08-17: `koinos-ai-mcp@0.2.0` live on npm (maintainer

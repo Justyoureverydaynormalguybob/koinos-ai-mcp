@@ -41,6 +41,7 @@ test("tools/list exposes the full read surface", async () => {
     const { tools: listed } = await client.listTools();
     const names = listed.map((t) => t.name).sort();
     assert.deepEqual(names, [
+      "chain_burn",
       "chat_delete",
       "chat_get",
       "chat_rename",
@@ -64,6 +65,16 @@ test("tools/list exposes the full read surface", async () => {
       "network_overview",
       "network_set_privacy_mode",
       "network_status",
+      "node_balances",
+      "node_dashboard",
+      "node_logs",
+      "node_producer_status",
+      "node_quick_sync",
+      "node_rewards_status",
+      "node_setup_status",
+      "node_start",
+      "node_status",
+      "node_stop",
       "nodes_status",
       "task_create",
       "task_delete",
@@ -577,6 +588,80 @@ test("compact mode shrinks the tool prompt but keeps the confirm contract", asyn
   } finally {
     await full.close();
     await slim.close();
+  }
+});
+
+test("koinos node tools: reads hit the right channels; gates and previews hold", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    for (const [name, channel, probe] of [
+      ["node_status", "node:status", (d) => d.data.network === "mainnet"],
+      ["node_setup_status", "setup:status", (d) => d.data.wsl.installed === true],
+      ["node_dashboard", "dashboard:summary", (d) => d.data.wallet.address === "1FakeAddr"],
+      ["node_balances", "chain:balances", (d) => d.data.koin === "12.5"],
+      ["node_rewards_status", "rewards:status", (d) => d.data.config.pct === 50],
+      ["node_producer_status", "producer:status", (d) => d.data.matches === false],
+      ["node_logs", "node:logs", (d) => Array.isArray(d.data.lines)],
+    ]) {
+      const result = await client.callTool({ name, arguments: {} });
+      assert.notEqual(result.isError, true, name);
+      assert.ok(probe(JSON.parse(result.content[0].text)), name);
+      const hit = JSON.parse(node.requests.at(-1).body);
+      assert.equal(hit.channel, channel, name);
+    }
+
+    // quick sync preview surfaces the sizes and downloads nothing
+    const sync = await client.callTool({ name: "node_quick_sync", arguments: {} });
+    const syncData = JSON.parse(sync.content[0].text);
+    assert.equal(syncData.executed, false);
+    assert.equal(syncData.archive, "63.5 GB");
+    assert.equal(syncData.requiredDisk, "165.1 GB");
+    assert.equal(
+      node.requests.filter((r) => (r.body ?? "").includes("node:quickSync\"")).length,
+      0,
+    );
+
+    // burn preview reports the max and burns nothing; confirmed burn fires
+    const preview = await client.callTool({ name: "chain_burn", arguments: { amount: "5" } });
+    const previewData = JSON.parse(preview.content[0].text);
+    assert.equal(previewData.executed, false);
+    assert.equal(previewData.maxBurnable, "12.5");
+    assert.equal(node.requests.filter((r) => (r.body ?? "").includes("chain:burn")).length, 0);
+
+    const burn = await client.callTool({ name: "chain_burn", arguments: { amount: "5", confirm: true } });
+    assert.equal(JSON.parse(burn.content[0].text).data.txId, "0xfakeburn");
+    assert.deepEqual(JSON.parse(node.requests.at(-1).body), {
+      channel: "chain:burn",
+      payload: { amount: "5" },
+    });
+
+    // start/stop gate then fire
+    const gated = await client.callTool({ name: "node_start", arguments: {} });
+    assert.equal(JSON.parse(gated.content[0].text).executed, false);
+    const started = await client.callTool({ name: "node_start", arguments: { confirm: true } });
+    assert.equal(JSON.parse(started.content[0].text).data.started, true);
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("the value-moving node channels are never referenced by any tool", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../src/tools.js", import.meta.url), "utf8");
+  for (const forbidden of [
+    "chain:send",
+    "fund:ethSend",
+    "fund:usdtSend",
+    "fund:vkoinSend",
+    "fund:bridge",
+    "fund:routeC",
+    "fund:buyUrl",
+    "wallet/reveal",
+    "wallet/restore",
+  ]) {
+    assert.equal(src.includes(forbidden), false, `tools.js must never reference ${forbidden}`);
   }
 });
 

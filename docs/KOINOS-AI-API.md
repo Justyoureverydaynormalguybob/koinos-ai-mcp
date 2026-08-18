@@ -220,6 +220,28 @@ Route quirks (v0.23.3; re-checked on v0.25.8 — read shapes unchanged):
   chats were invisible to `GET /core/chats` until then). Our `task_run_now` 120s
   timeout floor exists so the client stays connected instead of abandoning a queued run.
 
+## The embedded Koinos blockchain node (v0.28+)
+
+The full Koinos Node Desktop app was vendored into Core (v0.28.0): one channel-
+dispatched route replaces its 64 Electron IPC channels.
+
+`POST /core/koinos/rpc` `{channel, payload}` → `{ok, data}` · `GET
+/core/koinos/channels` lists channels · `GET /core/koinos/events` is an SSE
+stream of node events. **Privacy-gated server-side**: in local-only mode every
+call returns `{ok:false, localOnly:true, error:"…Switch to Local-First or
+Network…"}`.
+
+Observed live (v0.28.4): `node:status`, `setup:status`, `dashboard:summary`,
+`chain:balances` (`{address, koin, vhp, mana, formatted}` via public mainnet
+RPC — no local node needed), `rewards:status`, `producer:status`,
+`node:quickSyncInfo` (`{archiveBytes ~63.5GB, requiredBytes ~165GB,
+freeBytes}`), `chain:maxBurn`. `chain:burn` takes `{amount}` (human format).
+`node:logs` 400s plainly without Docker.
+
+Value-moving channels — `chain:send`, `fund:ethSend`/`usdtSend`/`vkoinSend`,
+`fund:bridge*`, `fund:routeC*`, `fund:buyUrl` — require the wallet password
+per call upstream and are **never wrapped** here, per policy.
+
 ## Privacy modes (what's actually implemented)
 
 `local-only` · `local-first` · `network`

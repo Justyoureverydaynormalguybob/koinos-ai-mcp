@@ -94,6 +94,9 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `model_import` / `model_remove_custom` | **mutating** | Register (or deregister) your own GGUF file as a custom model — the file is referenced in place, never copied or deleted |
 | `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts; `task_run_now` returns the model's answer |
 | `chat_rename` / `chat_delete` | **mutating** | Rename or permanently delete a chat conversation |
+| `node_status` / `node_setup_status` / `node_dashboard` / `node_balances` / `node_rewards_status` / `node_producer_status` / `node_logs` | read-only | The embedded Koinos blockchain node (app v0.28+): Docker/setup state, dashboard, on-chain KOIN/VHP/mana balances, auto-reburn, producer registration |
+| `node_start` / `node_stop` / `node_quick_sync` | **mutating** | Run the blockchain node; the quick-sync preview reports the ~63 GB download and disk needs before anything starts |
+| `chain_burn` | **mutating** | Burn KOIN→VHP at your own address (irreversible, enables block production); preview reports the max burnable first |
 | `key_create` / `key_revoke` / `key_set_budget` | **mutating** | API keys for `/v1/*`, with per-key monthly network spending caps |
 
 Every mutating tool requires `confirm: true`. Called without it, **nothing changes** —
@@ -142,6 +145,10 @@ A ~3-minute recording script covering all of this lives in
 - The wallet endpoints (create, unlock, reveal, restore, deposit) are **not wrapped at
   all** — an agent cannot touch key material or move funds at any confirmation level.
   The scheduler-URL setting is likewise unwrapped (repointing it is security-sensitive).
+- The same red line covers the embedded blockchain node's value-moving channels —
+  chain sends, ETH/USDT/vKOIN sends, bridges, swaps, and the onramp are never wrapped
+  (a test greps the source to keep it that way), and the node tools inherit the app's
+  server-side privacy gate: in Local-Only mode the whole node surface refuses.
 - Every mutating tool is confirm-gated (see above) and carries a blunt description of
   exactly what it changes; `task_delete` and `chat_delete` are additionally flagged
   destructive via MCP tool annotations.

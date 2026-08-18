@@ -174,9 +174,59 @@ export function startFakeNode({ routes } = {}) {
         status: 200,
         body: { ok: true, id: "key_ab12cd34ef56", budgetUsdMonthly: 5 },
       },
+      // Koinos node RPC channels (shapes observed live on app v0.28.4);
+      // dispatched on body.channel via the "RPC <channel>" key form below.
+      "RPC node:status": {
+        status: 200,
+        body: { ok: true, data: { network: "mainnet", docker: { ok: false, error: "Docker was not found." }, isRunning: false, services: [] } },
+      },
+      "RPC setup:status": {
+        status: 200,
+        body: { ok: true, data: { platform: "test", wsl: { installed: true }, docker: { installed: false, running: false }, ready: false } },
+      },
+      "RPC dashboard:summary": {
+        status: 200,
+        body: { ok: true, data: { network: { id: "mainnet" }, wallet: { exists: true, unlocked: true, address: "1FakeAddr" }, node: { isRunning: false } } },
+      },
+      "RPC chain:balances": {
+        status: 200,
+        body: { ok: true, data: { address: "1FakeAddr", koin: "12.5", vhp: "3", mana: "12.5" } },
+      },
+      "RPC rewards:status": {
+        status: 200,
+        body: { ok: true, data: { config: { enabled: false, pct: 50, mode: "burn" }, running: false } },
+      },
+      "RPC producer:status": {
+        status: 200,
+        body: { ok: true, data: { address: "1FakeAddr", registeredPublicKey: null, matches: false } },
+      },
+      "RPC node:logs": { status: 200, body: { ok: true, data: { lines: ["fake node log line"] } } },
+      "RPC node:quickSyncInfo": {
+        status: 200,
+        body: { ok: true, data: { archiveBytes: 63493141880, requiredBytes: 165082168888, freeBytes: 451197222912 } },
+      },
+      "RPC chain:maxBurn": {
+        status: 200,
+        body: { ok: true, data: { maxSat: "1250000000", maxFormatted: "12.5", manaLimited: false, manaFormatted: "12.5" } },
+      },
+      "RPC node:start": { status: 200, body: { ok: true, data: { started: true } } },
+      "RPC node:stop": { status: 200, body: { ok: true, data: { stopped: true } } },
+      "RPC node:quickSync": { status: 200, body: { ok: true, data: { started: true } } },
+      "RPC chain:burn": {
+        status: 200,
+        body: { ok: true, data: { txId: "0xfakeburn", amountSat: "500000000", amountFormatted: "5" } },
+      },
       ...routes,
     };
-    const route = table[`${req.method} ${req.url}`] ?? table[req.url];
+    let key = `${req.method} ${req.url}`;
+    if (req.method === "POST" && req.url === "/core/koinos/rpc") {
+      try {
+        key = `RPC ${JSON.parse(requests.at(-1).body || "{}").channel}`;
+      } catch {
+        /* fall through to the plain key */
+      }
+    }
+    const route = table[key] ?? table[req.url];
 
     if (!route) {
       res.writeHead(404, { "content-type": "application/json" });

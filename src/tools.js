@@ -33,6 +33,13 @@ function confirmGate(args, wouldDo) {
   };
 }
 
+// The embedded Koinos blockchain node (app v0.28+) exposes one channel-
+// dispatched route. Privacy-gated server-side: in Local-Only mode every
+// channel refuses with a self-explaining error that we simply relay.
+function nodeRpc(client, channel, payload = {}) {
+  return client.post("/core/koinos/rpc", { channel, payload });
+}
+
 function humanSize(bytes) {
   if (typeof bytes !== "number") return "unknown size";
   return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
@@ -748,6 +755,183 @@ export const tools = [
               "(local inference stays free and ungated).",
         ) ?? client.post(`/core/keys/${requireId(args)}/budget`, { budgetUsdMonthly: budget })
       );
+    },
+  },
+
+  // ----- M8: the embedded Koinos blockchain node (/core/koinos/rpc, v0.28+).
+  // The value-moving channels (the chain send, every fund send, and the
+  // bridge and swap flows) are deliberately not wrapped — same red line as
+  // the wallet endpoints: money-movers stay out of agent reach at any
+  // confirmation level, password-gated upstream or not. A test greps this
+  // file for those channel names to keep it that way.
+  {
+    name: "node_status",
+    description:
+      "Status of the embedded Koinos blockchain node (read-only): Docker " +
+      "availability, compose services, running state, producer key, data " +
+      "directory. Requires privacy mode local-first or network — in " +
+      "local-only the whole node surface is disabled and says so.",
+    inputSchema: NO_INPUT,
+    handler: (client) => nodeRpc(client, "node:status"),
+  },
+  {
+    name: "node_setup_status",
+    description:
+      "Readiness of the blockchain node's guided setup (read-only): WSL 2 " +
+      "state, Docker installed/running, and the remaining setup steps.",
+    inputSchema: NO_INPUT,
+    handler: (client) => nodeRpc(client, "setup:status"),
+  },
+  {
+    name: "node_dashboard",
+    description:
+      "The blockchain node dashboard (read-only): network, wallet " +
+      "existence/lock/address, node run state, sync, and earnings summary.",
+    inputSchema: NO_INPUT,
+    handler: (client) => nodeRpc(client, "dashboard:summary"),
+  },
+  {
+    name: "node_balances",
+    description:
+      "On-chain balances for this machine's wallet address (read-only): " +
+      "KOIN, VHP, and mana, read from public mainnet RPC. No local node " +
+      "required.",
+    inputSchema: NO_INPUT,
+    handler: (client) => nodeRpc(client, "chain:balances"),
+  },
+  {
+    name: "node_rewards_status",
+    description:
+      "Auto-reburn status (read-only): configuration (percent, mode), " +
+      "whether it is running, next run time, and the last result. Reburn " +
+      "converts block rewards back to VHP at this wallet's own address.",
+    inputSchema: NO_INPUT,
+    handler: (client) => nodeRpc(client, "rewards:status"),
+  },
+  {
+    name: "node_producer_status",
+    description:
+      "Block-producer registration status (read-only): the wallet address, " +
+      "the local producer key, the registered key on chain, and whether " +
+      "they match.",
+    inputSchema: NO_INPUT,
+    handler: (client) => nodeRpc(client, "producer:status"),
+  },
+  {
+    name: "node_logs",
+    description:
+      "Recent log output from the running blockchain node's services " +
+      "(read-only). Errors plainly when Docker or the node is not running.",
+    inputSchema: NO_INPUT,
+    handler: (client) => nodeRpc(client, "node:logs"),
+  },
+  {
+    name: "node_start",
+    description:
+      "MUTATING — starts the Koinos blockchain node on this machine " +
+      "(Docker compose up: multiple services, sustained disk and network " +
+      "use while syncing). Fails plainly when Docker is missing. Requires " +
+      "confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: { node: NODE_PROP, confirm: CONFIRM },
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(args, "Start the Koinos blockchain node (Docker compose up).") ??
+      nodeRpc(client, "node:start"),
+  },
+  {
+    name: "node_stop",
+    description:
+      "MUTATING — stops the Koinos blockchain node's Docker services. A " +
+      "registered producer stops producing blocks until started again. " +
+      "Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: { node: NODE_PROP, confirm: CONFIRM },
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(args, "Stop the Koinos blockchain node's services.") ??
+      nodeRpc(client, "node:stop"),
+  },
+  {
+    name: "node_quick_sync",
+    description:
+      "MUTATING — downloads a chain snapshot to fast-forward node sync. " +
+      "This is a very large download (observed: ~63 GB archive needing " +
+      "~165 GB free disk). Called without confirm, it reports the current " +
+      "archive size, required disk, and free disk instead of starting.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: { node: NODE_PROP, confirm: CONFIRM },
+      additionalProperties: false,
+    },
+    handler: async (client, args) => {
+      if (args.confirm !== true) {
+        const info = await nodeRpc(client, "node:quickSyncInfo");
+        const d = info?.data ?? {};
+        return {
+          executed: false,
+          requiresConfirmation: true,
+          archive: humanSize(d.archiveBytes),
+          requiredDisk: humanSize(d.requiredBytes),
+          freeDisk: humanSize(d.freeBytes),
+          wouldDo: `Download a ${humanSize(d.archiveBytes)} chain snapshot (needs ${humanSize(d.requiredBytes)} free; this machine has ${humanSize(d.freeBytes)}).`,
+          hint:
+            "Nothing was downloaded. Tell the user the sizes and, once they " +
+            "agree, call again with confirm: true.",
+        };
+      }
+      return nodeRpc(client, "node:quickSync");
+    },
+  },
+  {
+    name: "chain_burn",
+    description:
+      "MUTATING and IRREVERSIBLE — burns KOIN into VHP at this wallet's own " +
+      "address (the proof-of-burn stake that lets a node produce blocks). " +
+      "Nothing leaves the wallet, but KOIN converts one-way into VHP that " +
+      "only unwinds through block production. Called without confirm, it " +
+      "reports the maximum burnable amount and mana limit instead of " +
+      "burning. amount is a human-format KOIN string, e.g. \"5\" or \"12.5\".",
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        amount: {
+          type: "string",
+          description: "KOIN amount to burn, human format (e.g. \"5\")",
+        },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["amount"],
+      additionalProperties: false,
+    },
+    handler: async (client, args) => {
+      const amount = String(args.amount ?? "").trim();
+      if (!amount) throw new Error("Missing required argument: amount");
+      if (args.confirm !== true) {
+        const max = await nodeRpc(client, "chain:maxBurn");
+        const d = max?.data ?? {};
+        return {
+          executed: false,
+          requiresConfirmation: true,
+          requestedAmount: amount,
+          maxBurnable: d.maxFormatted ?? null,
+          manaLimited: d.manaLimited ?? null,
+          wouldDo: `Irreversibly burn ${amount} KOIN into VHP at this wallet's own address (max currently burnable: ${d.maxFormatted ?? "unknown"} KOIN).`,
+          hint:
+            "Nothing was burned. Tell the user the amount and the maximum, " +
+            "and only after they agree call again with confirm: true.",
+        };
+      }
+      return nodeRpc(client, "chain:burn", { amount });
     },
   },
 ];
