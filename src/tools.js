@@ -828,10 +828,12 @@ export const tools = [
   {
     name: "node_start",
     description:
-      "MUTATING — starts the Koinos blockchain node on this machine " +
-      "(Docker compose up: multiple services, sustained disk and network " +
-      "use while syncing). Fails plainly when Docker is missing. Requires " +
-      "confirm: true.",
+      "MUTATING — starts the Koinos blockchain node on this machine, and if " +
+      "Docker Desktop is missing this DOWNLOADS AND INSTALLS IT first " +
+      "(app v0.28.3+ one-click cascade; ~500 MB, launches an installer). " +
+      "Once Docker exists: compose up, multiple services, sustained disk and " +
+      "network use while syncing. State both consequences to the user before " +
+      "passing confirm: true.",
     annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
@@ -839,8 +841,12 @@ export const tools = [
       additionalProperties: false,
     },
     handler: (client, args) =>
-      confirmGate(args, "Start the Koinos blockchain node (Docker compose up).") ??
-      nodeRpc(client, "node:start"),
+      confirmGate(
+        args,
+        "Start the Koinos blockchain node — and if Docker Desktop is not " +
+          "installed, DOWNLOAD AND INSTALL it first (the app's one-click " +
+          "cascade; ~500 MB plus an installer run).",
+      ) ?? nodeRpc(client, "node:start"),
   },
   {
     name: "node_stop",
