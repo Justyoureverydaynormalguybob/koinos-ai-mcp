@@ -61,6 +61,27 @@ honours upstream's `KAI_CORE_PORT`), `KOINOS_AI_API_KEY` (sent as a Bearer token
 `nodes_status` update check against the latest GitHub release — the server's only
 outbound call beyond your own nodes; it's cached and fail-soft).
 
+### From your phone (HTTP mode)
+
+Claude's mobile/web custom connectors can reach your node through a tunnel:
+
+```sh
+# on the machine next to the node — read-only by default
+set KOINOS_AI_HTTP_TOKEN=<a long random secret>
+npx -y koinos-ai-mcp --http 8721
+# then expose it (no account needed for a quick tunnel):
+cloudflared tunnel --url http://127.0.0.1:8721
+```
+
+Add the printed `https://…trycloudflare.com/<token>/mcp` URL as a custom
+connector in Claude (Settings → Connectors), and your phone can ask "how's my
+node?" from anywhere.
+
+Security posture: binds `127.0.0.1` only (exposure is the tunnel's job); the
+endpoint hides behind the capability token — anything else is a bare 404;
+and HTTP mode is **read-only** — mutating tools are absent and refused —
+unless you opt in with `--http-writes`. The machine must be awake to answer.
+
 ### More than one machine
 
 ```json

@@ -110,6 +110,14 @@ Test suite: 30 green via `npm test`.
       Node tools inherit the app's server-side privacy gate (refused in local-only).
       Live-verified on v0.28.4 against a real wallet (2026-08-18). 40 tools, 33 tests.
 
+- [x] M9 — HTTP mode (2026-08-18): `--http <port>` serves Streamable HTTP,
+      stateless (fresh server+transport per request), bound to 127.0.0.1 with a
+      capability-URL token (`/<token>/mcp`; wrong token = bare 404). Read-only by
+      default — mutating tools absent from the list and refused by name — writes
+      only via `--http-writes`/`KOINOS_AI_HTTP_WRITES=1`. Built for phone access
+      via a tunnel + claude.ai custom connector. Live-smoked against v0.28.4.
+      44 tools total (over stdio), 36 tests. v0.4.0.
+
 ## Ideas / backlog
 
 - ~~npm publish~~ Done 2026-08-17: `koinos-ai-mcp@0.2.0` live on npm (maintainer

@@ -9,17 +9,23 @@ import { tools } from "./tools.js";
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
 
-export function createServer(pool, { compact = false } = {}) {
+export function createServer(pool, { compact = false, readOnly = false } = {}) {
   const server = new Server(
     { name: "koinos-ai-mcp", version },
     { capabilities: { tools: {} } },
   );
 
+  // readOnly (the HTTP-mode default) exposes only tools that cannot change
+  // anything — mutating tools vanish from the list AND are refused by name.
+  const visible = readOnly
+    ? tools.filter((t) => t.annotations?.readOnlyHint !== false)
+    : tools;
+
   // With one configured node the `node` argument can never do anything —
   // compact mode drops it (29 copies of a useless parameter add up).
   const dropNode = compact && pool.names.length === 1;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map(({ name, description, inputSchema, annotations }) => ({
+    tools: visible.map(({ name, description, inputSchema, annotations }) => ({
       name,
       description: compact ? compactDescription(description, inputSchema) : description,
       inputSchema: compact ? compactSchema(inputSchema, dropNode) : inputSchema,
@@ -29,9 +35,13 @@ export function createServer(pool, { compact = false } = {}) {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
-    const tool = tools.find((t) => t.name === name);
+    const tool = visible.find((t) => t.name === name);
     if (!tool) {
-      return errorResult(`Unknown tool: ${name}`);
+      return errorResult(
+        readOnly && tools.some((t) => t.name === name)
+          ? `Tool "${name}" is disabled: this endpoint is read-only.`
+          : `Unknown tool: ${name}`,
+      );
     }
     try {
       const client = pool.resolve(args.node);
