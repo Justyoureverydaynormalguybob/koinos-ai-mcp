@@ -61,6 +61,10 @@ honours upstream's `KAI_CORE_PORT`), `KOINOS_AI_API_KEY` (sent as a Bearer token
 `nodes_status` update check against the latest GitHub release — the server's only
 outbound call beyond your own nodes; it's cached and fail-soft).
 
+Running a hardened/headless Core with `KAI_CORE_TOKEN` set (app v0.29.2+)? Set
+`KOINOS_AI_API_KEY` to the same value — every request already carries it as a
+Bearer token. Multi-node deployments use `KOINOS_AI_API_KEY_<NAME>` per node.
+
 ### From your phone (HTTP mode)
 
 Claude's mobile/web custom connectors can reach your node through a tunnel:
@@ -111,7 +115,7 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `earn_start` / `earn_stop` | **mutating** | Start/stop selling idle compute for KAI |
 | `earn_nudge` | **mutating** | Re-register with the scheduler now (node dropped off after OS standby) |
 | `network_set_privacy_mode` | **mutating** | Change privacy posture (local-only / local-first / network) |
-| `model_ensure` | **mutating** | Download+load a model by alias; without `confirm` it just reports the size |
+| `model_ensure` / `model_download_cancel` | **mutating** | Download+load a model by alias (preview reports the size first); abort a stalled download without a restart |
 | `model_import` / `model_remove_custom` | **mutating** | Register (or deregister) your own GGUF file as a custom model — the file is referenced in place, never copied or deleted |
 | `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts; `task_run_now` returns the model's answer |
 | `chat_rename` / `chat_delete` | **mutating** | Rename or permanently delete a chat conversation |

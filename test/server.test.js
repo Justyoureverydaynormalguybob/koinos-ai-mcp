@@ -60,6 +60,7 @@ test("tools/list exposes the full read surface", async () => {
       "key_revoke",
       "key_set_budget",
       "keys_list",
+      "model_download_cancel",
       "model_ensure",
       "model_import",
       "model_remove_custom",
@@ -666,11 +667,20 @@ test("teams and bench: reads, gates, and SSE aggregation", async () => {
       ["team_run", { template: "research", question: "q" }],
       ["bench_run", {}],
       ["dev_tools_set", { enabled: true }],
+      ["model_download_cancel", {}],
     ]) {
       const r = await client.callTool({ name, arguments: args });
       assert.equal(JSON.parse(r.content[0].text).executed, false, name);
     }
     assert.deepEqual(node.requests.filter((r) => r.method === "POST"), []);
+
+    // model_download_cancel fires with confirm.
+    const cancelled = await client.callTool({
+      name: "model_download_cancel",
+      arguments: { confirm: true },
+    });
+    assert.equal(JSON.parse(cancelled.content[0].text).cancelled, true);
+    assert.equal(node.requests.at(-1).path, "/core/models/download/cancel");
 
     // Confirmed team run aggregates the SSE stream into answer + trace.
     const run = await client.callTool({

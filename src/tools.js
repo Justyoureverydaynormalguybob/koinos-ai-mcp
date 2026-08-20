@@ -371,6 +371,23 @@ export const tools = [
       client.post("/core/network/config", { privacyMode: args.mode }),
   },
   {
+    name: "model_download_cancel",
+    description:
+      "MUTATING — aborts an in-flight model/engine download (app v0.29.2+), " +
+      "freeing the load slot without a node restart. Honest when nothing is " +
+      "cancellable: a load step that is not a download reports cancelled: " +
+      "false with a note. Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: { node: NODE_PROP, confirm: CONFIRM },
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      confirmGate(args, "Abort the in-flight model/engine download on the node.") ??
+      client.post("/core/models/download/cancel", {}),
+  },
+  {
     name: "model_ensure",
     description:
       "MUTATING — downloads and loads a model by alias (e.g. koinos-balanced) " +

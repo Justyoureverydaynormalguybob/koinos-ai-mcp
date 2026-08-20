@@ -144,6 +144,7 @@ export function startFakeNode({ routes } = {}) {
         status: 200,
         body: { ok: true, started: true, alias: "koinos-balanced" },
       },
+      "POST /core/models/download/cancel": { status: 200, body: { ok: true, cancelled: true } },
       // Import replies done:false after ~800ms upstream; the UI polls
       // GET /core/models (importing.pct / importError) for progress.
       "POST /core/models/import": { status: 200, body: { ok: true, done: false } },

@@ -1,6 +1,6 @@
 {
   "name": "koinos-ai-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "MCP server for Koinos AI — operate a local Koinos AI node from any MCP client",
   "type": "module",
   "main": "src/index.js",
