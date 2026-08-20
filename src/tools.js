@@ -40,6 +40,32 @@ function nodeRpc(client, channel, payload = {}) {
   return client.post("/core/koinos/rpc", { channel, payload });
 }
 
+// Team and bench runs stream Server-Sent Events and end with a terminal
+// {done:...} event; the whole stream arrives as one text body once the run
+// finishes, so parsing is a line scan, not a live stream.
+function parseSse(text) {
+  const events = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    if (line.startsWith("data: ")) {
+      try {
+        events.push(JSON.parse(line.slice(6)));
+      } catch {
+        /* partial line — skip */
+      }
+    }
+  }
+  return events;
+}
+
+function terminalEvent(events, what) {
+  const done = events.find((e) => e.done);
+  if (!done) throw new Error(`${what} ended without a terminal event`);
+  if (done.error) throw new Error(`${what} failed: ${done.error}`);
+  return done;
+}
+
+const PIPELINE_TIMEOUT_MS = 20 * 60_000; // team/bench pipelines take minutes
+
 function humanSize(bytes) {
   if (typeof bytes !== "number") return "unknown size";
   return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
@@ -938,6 +964,161 @@ export const tools = [
         };
       }
       return nodeRpc(client, "chain:burn", { amount });
+    },
+  },
+
+  // ----- M10: AI Teams + benchmark + the developer-tools switch (v0.28.8+).
+  {
+    name: "teams_list",
+    description:
+      "List the AI Team templates available on the node (read-only): id, " +
+      "label, what each role pipeline does, the tools it may use, and its " +
+      "stages. Teams run entirely through the node's own registry, budgets, " +
+      "and privacy rules.",
+    inputSchema: NO_INPUT,
+    handler: (client) => client.get("/core/teams"),
+  },
+  {
+    name: "team_run",
+    description:
+      "MUTATING — runs an AI Team pipeline on the node's local model: up to " +
+      "24 model calls, typically minutes of sustained local compute. " +
+      "allowSensitive: true additionally consents to sandboxed run_code " +
+      "execution (Analyst team) — only pass it when the user has explicitly " +
+      "agreed. Returns the final answer plus the trace. Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        template: { type: "string", description: "Template id from teams_list, e.g. research" },
+        question: { type: "string", description: "The task/question for the team" },
+        model: { type: "string", description: "Model alias (optional; node default otherwise)" },
+        allowSensitive: {
+          type: "boolean",
+          description: "Consent for sensitive tools (sandboxed code). Only with explicit user agreement.",
+        },
+        spec: {
+          type: "object",
+          description:
+            "Custom team spec (Developer tools must be enabled on the node). " +
+            "May only narrow tools and lower budgets.",
+        },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["template", "question"],
+      additionalProperties: false,
+    },
+    handler: async (client, args) => {
+      const gate = confirmGate(
+        args,
+        `Run the "${args.template}" AI Team on "${String(args.question).slice(0, 80)}" — ` +
+          `up to 24 local model calls, minutes of compute` +
+          (args.allowSensitive === true ? ", WITH sandboxed code execution consented" : "") +
+          ".",
+      );
+      if (gate) return gate;
+      // The run endpoint has no server-side model default (the app's UI always
+      // sends the composer's selection) — default to the node's active model,
+      // else its first ready alias.
+      let model = args.model;
+      if (!model) {
+        const health = await client.get("/core/health");
+        model = health?.modules?.runtime?.activeAlias;
+        if (!model) {
+          const catalog = await client.get("/core/models");
+          model = catalog?.aliases?.find?.((a) => a.status === "ready")?.alias;
+        }
+        if (!model) throw new Error("No model is loaded or installed on the node — install one first (model_ensure).");
+      }
+      const raw = await client.post(
+        "/core/teams/run",
+        {
+          template: args.template,
+          question: args.question,
+          model,
+          allowSensitive: args.allowSensitive === true,
+          ...(args.spec ? { spec: args.spec } : {}),
+        },
+        { timeoutMs: PIPELINE_TIMEOUT_MS },
+      );
+      const events = parseSse(raw);
+      const done = terminalEvent(events, "Team run");
+      const trace = events.filter((e) => e.trace).map((e) => e.trace);
+      return {
+        answer: done.answer,
+        modelCalls: done.modelCalls,
+        trace: trace.length > 60 ? [...trace.slice(0, 60), `…${trace.length - 60} more entries`] : trace,
+      };
+    },
+  },
+  {
+    name: "bench_list",
+    description:
+      "List the node's objective benchmark suites (read-only): cases and " +
+      "whether Developer tools (which gate running them) are enabled.",
+    inputSchema: NO_INPUT,
+    handler: (client) => client.get("/core/bench"),
+  },
+  {
+    name: "bench_run",
+    description:
+      "MUTATING — runs the node's objective benchmark suite against a model: " +
+      "~10 scored cases, minutes of sustained local compute. Requires the " +
+      "node's Developer tools switch to be on (see dev_tools_set). Requires " +
+      "confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        suite: { type: "string", description: "Suite id (default core)" },
+        model: { type: "string", description: "Model alias to benchmark (optional)" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      additionalProperties: false,
+    },
+    handler: async (client, args) => {
+      const gate = confirmGate(
+        args,
+        `Run benchmark suite "${args.suite ?? "core"}"${args.model ? ` on ${args.model}` : ""} — ` +
+          "roughly 10 scored model calls, minutes of local compute.",
+      );
+      if (gate) return gate;
+      const raw = await client.post(
+        "/core/bench/run",
+        { suite: args.suite ?? "core", ...(args.model ? { model: args.model } : {}) },
+        { timeoutMs: PIPELINE_TIMEOUT_MS },
+      );
+      const events = parseSse(raw);
+      const done = terminalEvent(events, "Benchmark");
+      return { summary: done.summary, cases: events.filter((e) => e.case).map((e) => e.case) };
+    },
+  },
+  {
+    name: "dev_tools_set",
+    description:
+      "MUTATING — turns the node's Developer tools switch on or off. On " +
+      "unlocks the benchmark and custom team specs (same budget ceilings " +
+      "and permission model; it reveals capability, never permission). " +
+      "Requires confirm: true.",
+    annotations: { readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean", description: "true = on, false = off" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["enabled"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      if (typeof args.enabled !== "boolean") throw new Error("enabled must be true or false");
+      return (
+        confirmGate(args, `Turn the node's Developer tools ${args.enabled ? "ON" : "OFF"}.`) ??
+        client.post("/core/dev", { enabled: args.enabled })
+      );
     },
   },
 ];

@@ -41,11 +41,14 @@ test("tools/list exposes the full read surface", async () => {
     const { tools: listed } = await client.listTools();
     const names = listed.map((t) => t.name).sort();
     assert.deepEqual(names, [
+      "bench_list",
+      "bench_run",
       "chain_burn",
       "chat_delete",
       "chat_get",
       "chat_rename",
       "chats_list",
+      "dev_tools_set",
       "doc_get",
       "docs_list",
       "earn_nudge",
@@ -81,6 +84,8 @@ test("tools/list exposes the full read surface", async () => {
       "task_run_now",
       "task_set_enabled",
       "tasks_list",
+      "team_run",
+      "teams_list",
     ]);
     for (const t of listed) {
       assert.equal(t.inputSchema.type, "object");
@@ -641,6 +646,61 @@ test("koinos node tools: reads hit the right channels; gates and previews hold",
     assert.equal(JSON.parse(gated.content[0].text).executed, false);
     const started = await client.callTool({ name: "node_start", arguments: { confirm: true } });
     assert.equal(JSON.parse(started.content[0].text).data.started, true);
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("teams and bench: reads, gates, and SSE aggregation", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    const list = await client.callTool({ name: "teams_list", arguments: {} });
+    assert.equal(JSON.parse(list.content[0].text).templates.length, 2);
+    const bench = await client.callTool({ name: "bench_list", arguments: {} });
+    assert.equal(JSON.parse(bench.content[0].text).enabled, false);
+
+    // Gates: nothing fires unconfirmed.
+    for (const [name, args] of [
+      ["team_run", { template: "research", question: "q" }],
+      ["bench_run", {}],
+      ["dev_tools_set", { enabled: true }],
+    ]) {
+      const r = await client.callTool({ name, arguments: args });
+      assert.equal(JSON.parse(r.content[0].text).executed, false, name);
+    }
+    assert.deepEqual(node.requests.filter((r) => r.method === "POST"), []);
+
+    // Confirmed team run aggregates the SSE stream into answer + trace.
+    const run = await client.callTool({
+      name: "team_run",
+      arguments: { template: "write-review", question: "say 42", confirm: true },
+    });
+    const runData = JSON.parse(run.content[0].text);
+    assert.equal(runData.answer, "42");
+    assert.equal(runData.modelCalls, 7);
+    assert.equal(runData.trace.length, 2);
+    const posted = JSON.parse(node.requests.at(-1).body);
+    assert.deepEqual(posted, {
+      template: "write-review",
+      question: "say 42",
+      model: "koinos-fast", // defaulted from the node's first ready alias
+      allowSensitive: false,
+    });
+
+    // Confirmed bench run aggregates cases + summary.
+    const benchRun = await client.callTool({ name: "bench_run", arguments: { confirm: true } });
+    const benchData = JSON.parse(benchRun.content[0].text);
+    assert.equal(benchData.summary.score, 0.9);
+    assert.equal(benchData.cases[0].id, "arithmetic");
+
+    // Dev switch fires with confirm.
+    const dev = await client.callTool({
+      name: "dev_tools_set",
+      arguments: { enabled: true, confirm: true },
+    });
+    assert.equal(JSON.parse(dev.content[0].text).enabled, true);
   } finally {
     await close();
     await node.close();

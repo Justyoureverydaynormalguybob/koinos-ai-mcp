@@ -118,6 +118,15 @@ Test suite: 30 green via `npm test`.
       via a tunnel + claude.ai custom connector. Live-smoked against v0.28.4.
       44 tools total (over stdio), 36 tests. v0.4.0.
 
+- [x] M10 — AI Teams + benchmark + dev switch (app v0.28.8+, 2026-08-20):
+      `teams_list`/`bench_list` reads, confirm-gated `team_run` (SSE trace
+      aggregated into answer+trace; model defaults to the node's active/first-ready
+      alias — the endpoint has no server-side default), `bench_run`, and
+      `dev_tools_set` (gates bench + custom team specs upstream). Live-verified on
+      v0.29.1 incl. a real writer→critic team run (2 model calls, 10s). Account
+      endpoints deliberately unwrapped (interactive auth + wallet-key signing).
+      45 tools, 37 tests. v0.5.0.
+
 ## Ideas / backlog
 
 - ~~npm publish~~ Done 2026-08-17: `koinos-ai-mcp@0.2.0` live on npm (maintainer

@@ -174,6 +174,31 @@ export function startFakeNode({ routes } = {}) {
         status: 200,
         body: { ok: true, id: "key_ab12cd34ef56", budgetUsdMonthly: 5 },
       },
+      // AI Teams / bench / dev switch (shapes observed live on app v0.29.1).
+      "/core/teams": {
+        status: 200,
+        body: {
+          ok: true,
+          templates: [
+            { id: "research", label: "Research team", tools: ["web_search"], stages: ["plan", "work", "write", "critique", "revise"] },
+            { id: "write-review", label: "Write & review", tools: ["write_file"], stages: ["write", "critique", "revise"] },
+          ],
+        },
+      },
+      "/core/bench": {
+        status: 200,
+        body: { ok: true, suites: [{ id: "core", label: "Core starter suite", cases: [{ id: "arithmetic", kind: "chat" }] }], enabled: false },
+      },
+      "/core/dev": { status: 200, body: { ok: true, enabled: false } },
+      "POST /core/dev": { status: 200, body: { ok: true, enabled: true } },
+      "POST /core/teams/run": {
+        status: 200,
+        body: 'data: {"trace":{"stage":"plan","note":"split into 2"}}\n\ndata: {"trace":{"stage":"write","note":"drafting"}}\n\ndata: {"done":true,"answer":"42","modelCalls":7}\n\n',
+      },
+      "POST /core/bench/run": {
+        status: 200,
+        body: 'data: {"case":{"id":"arithmetic","pass":true}}\n\ndata: {"done":true,"summary":{"passed":9,"total":10,"score":0.9}}\n\n',
+      },
       // Koinos node RPC channels (shapes observed live on app v0.28.4);
       // dispatched on body.channel via the "RPC <channel>" key form below.
       "RPC node:status": {

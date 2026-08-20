@@ -116,6 +116,9 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts; `task_run_now` returns the model's answer |
 | `chat_rename` / `chat_delete` | **mutating** | Rename or permanently delete a chat conversation |
 | `node_status` / `node_setup_status` / `node_dashboard` / `node_balances` / `node_rewards_status` / `node_producer_status` / `node_logs` | read-only | The embedded Koinos blockchain node (app v0.28+): Docker/setup state, dashboard, on-chain KOIN/VHP/mana balances, auto-reburn, producer registration |
+| `teams_list` / `bench_list` | read-only | AI Team templates and benchmark suites available on the node (app v0.28.8+) |
+| `team_run` | **mutating** | Run a role-pipeline AI Team on the local model (budgeted upstream; sandboxed-code consent is a separate explicit flag) |
+| `bench_run` / `dev_tools_set` | **mutating** | Objective model benchmark + the Developer-tools switch that gates it |
 | `node_start` / `node_stop` / `node_quick_sync` | **mutating** | Run the blockchain node; the quick-sync preview reports the ~63 GB download and disk needs before anything starts |
 | `chain_burn` | **mutating** | Burn KOIN→VHP at your own address (irreversible, enables block production); preview reports the max burnable first |
 | `key_create` / `key_revoke` / `key_set_budget` | **mutating** | API keys for `/v1/*`, with per-key monthly network spending caps |
