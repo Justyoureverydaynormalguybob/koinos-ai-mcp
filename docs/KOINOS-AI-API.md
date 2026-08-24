@@ -9,6 +9,24 @@ version **v0.21.2** (2026-08-15); route table re-read from `gateway.js` @ tag
 against a running node before depending on any of it — they shipped 21 releases in
 40 hours and the surface is moving fast.
 
+**Tags are stale; the real source lives on session branches (2026-08-24):** the
+release tags' `gateway.js` is byte-identical from v0.42.0 through v0.48.0 and ends
+at the 0.25-era surface, and GitHub releases carry no notes. The shipping code is
+on the currently-active `claude/…` session branch — `claude/koinos-ai-takeover-co25fw`
+as of 2026-08-24 (`gateway.js` there is 2090 lines with every shipped route:
+koinos, teams, bench, agents, mcp, memory, voice, code, email, calendar, tools).
+He rotates branches per working session: list
+`api.github.com/repos/therexdev/kaiapp/branches` and take the newest. Read shapes
+from that branch, then verify against the live node.
+
+**The changelog lives at https://koinosai.com/updates** (shipped in 0.48.0;
+per-version anchors like `#v0.48.0`). Machine-readable feed:
+`https://koinosai.com/updates.json` → `{latest, releases: [{version, date,
+title, changes: [{kind: new|fix|change, text}]}]}` — its own `_comment` declares
+it the source of truth that every release must update in the same session it
+ships. **Check it first when the app version jumps**, then probe the live node
+for the shapes behind whatever it announces.
+
 ## Transport
 
 | | |
@@ -261,6 +279,34 @@ those are **roadmap only**, absent from the code.
 routing modes — Local First, Private Pool First, Local Only, Network Only, Lowest Cost,
 Fastest — plus a future Confidential Only. The set will grow. Tools should pass mode
 strings through and surface whatever the node reports, validating loosely at most.
+
+## Observed live responses (v0.48.0, 2026-08-24) — no public source exists
+
+`GET /core/mcp` → `{ ok, servers, catalog, node }` — the app's MCP client registry
+(this is what the Developer Tools tool picker reads; the `srv…` id prefixing tool
+names comes from here).
+
+- `servers[]`: `{id: "srv<hex>", name, transport: "stdio", command, args,
+  localSafe, trusted, autoConnect, connected, tools: [{name, description,
+  inputSchema}]}` — the full tool schemas make this ~16 KB with one server
+  connected; our `mcp_servers_list` strips schemas to names.
+- `catalog[]`: the one-click install list — `{id, name, description, transport,
+  command: "npx", args: [pinned package@version], argsPrompt?, requires: "node"}`.
+- `node`: `{available, source: "system", version, installable, downloadBytes}` —
+  the Node.js runtime the app would use to run stdio servers.
+- ⚠ **Registration writes are never wrapped**: adding a server = the app executes
+  an arbitrary `command`. Same policy class as the wallet endpoints.
+
+`GET /core/memory` → `{ ok, memories: [] }` — agent/chat memory store (empty on
+the observed node; entry shape unknown until one exists).
+
+`GET /core/voice` → `{ ok, available, engine, model, installable,
+downloadBytes, setup }` — voice mode; observed uninstalled with a ~156 MB
+engine download pending. Install/write endpoints unobserved.
+
+Probed 404 on 0.48.0 (do not exist yet): `/core/agents` (GET — the runner is
+POST `/core/agents/run` only), `/core/mcp/servers`, `/core/updates`,
+`/core/skills`, `/core/search`, `/core/plugins`.
 
 ## Runtime ladder
 

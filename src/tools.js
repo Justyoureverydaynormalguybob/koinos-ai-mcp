@@ -220,6 +220,51 @@ export const tools = [
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/keys"),
   },
+  {
+    name: "mcp_servers_list",
+    description:
+      "List the MCP servers registered in the Koinos AI app (read-only, app " +
+      "v0.48+): per server the id, name, transport, launch command, trust " +
+      "flags, connection state, and tool names (schemas omitted to keep " +
+      "output small), plus the app's one-click install catalog and whether a " +
+      "Node.js runtime is available to run stdio servers. Registration is " +
+      "deliberately not writable through this MCP server — registering a " +
+      "server executes an arbitrary command.",
+    inputSchema: NO_INPUT,
+    handler: async (client) => {
+      const data = await client.get("/core/mcp");
+      if (Array.isArray(data?.servers)) {
+        return {
+          ...data,
+          servers: data.servers.map(({ tools: serverTools, ...rest }) => ({
+            ...rest,
+            toolCount: Array.isArray(serverTools) ? serverTools.length : null,
+            toolNames: Array.isArray(serverTools)
+              ? serverTools.map((t) => t?.name).filter(Boolean)
+              : undefined,
+          })),
+        };
+      }
+      return data;
+    },
+  },
+  {
+    name: "memory_list",
+    description:
+      "List the memories the Koinos AI app has stored for its agents/chats " +
+      "(read-only, app v0.48+). Changes nothing.",
+    inputSchema: NO_INPUT,
+    handler: (client) => client.get("/core/memory"),
+  },
+  {
+    name: "voice_status",
+    description:
+      "Get the Koinos AI app's voice-mode state (read-only, app v0.48+): " +
+      "whether voice is available, whether the engine and model are " +
+      "installed, and the download size if not. Does not install anything.",
+    inputSchema: NO_INPUT,
+    handler: (client) => client.get("/core/voice"),
+  },
 
   {
     name: "nodes_status",

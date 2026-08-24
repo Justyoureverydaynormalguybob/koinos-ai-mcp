@@ -134,6 +134,63 @@ export function startFakeNode({ routes } = {}) {
       "/core/chats/chat1": { status: 200, body: { ok: true, chat: FAKE_CHAT } },
       "/core/docs": { status: 200, body: { ok: true, docs: [] } },
       "/core/keys": { status: 200, body: { ok: true, required: false, keys: [] } },
+      // MCP registry, memory, voice — shapes observed live on v0.48.0 (2026-08-24).
+      "/core/mcp": {
+        status: 200,
+        body: {
+          ok: true,
+          servers: [
+            {
+              id: "srvmsxqbdxy249df8",
+              name: "koinos-ai-mcp",
+              transport: "stdio",
+              command: "node",
+              args: ["C:\\repo\\src\\index.js", "--compact"],
+              localSafe: true,
+              trusted: true,
+              autoConnect: true,
+              connected: true,
+              tools: [
+                {
+                  name: "health",
+                  description: "Check the node's health (read-only).",
+                  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+                },
+                {
+                  name: "models_list",
+                  description: "List models (read-only).",
+                  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+                },
+              ],
+            },
+          ],
+          catalog: [
+            {
+              id: "filesystem",
+              name: "Your files (folders you pick)",
+              description: "Let the AI read and write files in folders you choose.",
+              transport: "stdio",
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem@2026.7.10"],
+              requires: "node",
+            },
+          ],
+          node: { available: true, source: "system", version: "v23.5.0", installable: true },
+        },
+      },
+      "/core/memory": { status: 200, body: { ok: true, memories: [] } },
+      "/core/voice": {
+        status: 200,
+        body: {
+          ok: true,
+          available: false,
+          engine: false,
+          model: false,
+          installable: true,
+          downloadBytes: 156158656,
+          setup: null,
+        },
+      },
       "POST /core/earn/start": { status: 200, body: { ok: true, worker: { running: true } } },
       "POST /core/earn/stop": { status: 200, body: { ok: true, worker: { running: false } } },
       "POST /core/network/config": {

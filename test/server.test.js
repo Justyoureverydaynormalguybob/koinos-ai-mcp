@@ -61,6 +61,8 @@ test("tools/list exposes the full read surface", async () => {
       "key_revoke",
       "key_set_budget",
       "keys_list",
+      "mcp_servers_list",
+      "memory_list",
       "model_download_cancel",
       "model_ensure",
       "model_import",
@@ -88,6 +90,7 @@ test("tools/list exposes the full read surface", async () => {
       "tasks_list",
       "team_run",
       "teams_list",
+      "voice_status",
     ]);
     for (const t of listed) {
       assert.equal(t.inputSchema.type, "object");
@@ -163,6 +166,8 @@ test("read tools return live node data", async () => {
       ["tasks_list", (d) => Array.isArray(d.tasks)],
       ["docs_list", (d) => Array.isArray(d.docs)],
       ["keys_list", (d) => d.required === false],
+      ["memory_list", (d) => Array.isArray(d.memories)],
+      ["voice_status", (d) => d.available === false && d.installable === true],
     ]) {
       const result = await client.callTool({ name, arguments: {} });
       assert.notEqual(result.isError, true, name);
@@ -712,6 +717,29 @@ test("teams and bench: reads, gates, and SSE aggregation", async () => {
       arguments: { enabled: true, confirm: true },
     });
     assert.equal(JSON.parse(dev.content[0].text).enabled, true);
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("mcp_servers_list keeps registry metadata but strips tool schemas", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    const result = await client.callTool({ name: "mcp_servers_list", arguments: {} });
+    assert.notEqual(result.isError, true, result.content?.[0]?.text);
+    const data = JSON.parse(result.content[0].text);
+    const srv = data.servers[0];
+    assert.equal(srv.name, "koinos-ai-mcp");
+    assert.equal(srv.connected, true);
+    assert.equal(srv.toolCount, 2);
+    assert.deepEqual(srv.toolNames, ["health", "models_list"]);
+    assert.equal("tools" in srv, false);
+    assert.ok(!result.content[0].text.includes("inputSchema"));
+    // Catalog and node-runtime info pass through untouched.
+    assert.equal(data.catalog[0].id, "filesystem");
+    assert.equal(data.node.available, true);
   } finally {
     await close();
     await node.close();

@@ -112,6 +112,9 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `chat_get` | read-only | One chat with the full transcript |
 | `docs_list` / `doc_get` | read-only | Stored documents |
 | `keys_list` | read-only | API key metadata + whether auth is required (keys hashed upstream) |
+| `mcp_servers_list` | read-only | MCP servers registered in the app: connection state, tool names, one-click catalog (registration itself is deliberately not writable from here) |
+| `memory_list` | read-only | Memories the app has stored for its agents/chats (app v0.48+) |
+| `voice_status` | read-only | Voice-mode state: installed or not, download size if not (app v0.48+) |
 | `earn_start` / `earn_stop` | **mutating** | Start/stop selling idle compute for KAI |
 | `earn_nudge` | **mutating** | Re-register with the scheduler now (node dropped off after OS standby) |
 | `network_set_privacy_mode` | **mutating** | Change privacy posture (local-only / local-first / network) |

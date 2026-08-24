@@ -27,7 +27,7 @@ already OpenAI-compatible, so every existing client can use it directly.
 - `src/nodes.js` — client pool; resolves the optional `node` tool argument
 - `src/client.js` — HTTP client; the API key lives in a private field and is asserted
   (by test) never to appear in error messages
-- `src/tools.js` — the tool registry: 22 read-only + 25 confirm-gated mutating tools
+- `src/tools.js` — the tool registry: 25 read-only + 25 confirm-gated mutating tools
 - `src/release.js` — GitHub latest-release lookup for the `nodes_status` update
   check: cached 10 min, fail-soft, 3s timeout; the server's ONLY outbound call
   beyond the configured nodes (`KOINOS_AI_NO_VERSION_CHECK=1` disables,
@@ -47,6 +47,11 @@ already OpenAI-compatible, so every existing client can use it directly.
 - Never log or persist API keys or wallet material.
 - Keep `test/fake-node.js` shapes in sync with real observed responses (documented in
   `docs/KOINOS-AI-API.md` → "Observed live responses").
+- Tracking upstream: check https://koinosai.com/updates first (machine-readable
+  `/updates.json`, `latest` field; exists since app 0.48.0). Release tags carry
+  stale 0.25-era source and no notes — the real code is on the rotating `claude/…`
+  session branch (list the repo's branches, take the newest; see the API doc
+  header). Read shapes there, then verify against the live node.
 - Third-party reference documents (PDF/DOCX) stay local and uncommitted — `.gitignore`
   enforces this.
 
@@ -61,6 +66,9 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
 - The wallet family (`create`, `unlock`, `reveal`, `restore`, `deposit`) and the
   scheduler-URL setting are **not wrapped at any confirmation level** — an agent cannot
   touch key material, move funds, or repoint the node at a different scheduler.
+- MCP-registration writes (`/core/mcp` add/remove/toggle, app v0.48+) join that list:
+  registering an MCP server makes the app execute an arbitrary command, so wrapping
+  it would be remote code execution by design. Read-only listing only.
 - Mutating tools carry blunt descriptions and MCP tool annotations
   (`readOnlyHint`/`destructiveHint`).
 - `key_create` necessarily returns the new key's plaintext secret once — the only
@@ -133,7 +141,36 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       (sent real feedback about the app's MCP tool-picker labels). Hidden in
       HTTP read-only mode like every mutating tool. 47 tools, 38 tests. v0.5.2.
 
+- [x] M11 — 0.48.0 keep-up reads (2026-08-24): `mcp_servers_list` (the app's MCP
+      registry — server metadata, connection state, tool names with schemas
+      stripped, the one-click catalog, Node-runtime availability; registration
+      writes are policy-banned, see Safety model), `memory_list`, `voice_status`.
+      App jumped 0.42→0.48 in two days; shapes were discovered and verified
+      against the live node (release tags carry stale 0.25-era source). Same
+      day, corrected: the real source lives on the rotating `claude/…` session
+      branch, and the changelog moved to koinosai.com/updates — both now in
+      Conventions. Memory/voice write shapes since read from the branch (see
+      backlog). 50 tools, 39 tests. v0.6.0.
+
 ## Ideas / backlog
+
+- Model uninstall (app 0.43.0) — shapes read from the live branch:
+  `GET /core/models/installed/<packageId>` returns a removal *plan* (upstream
+  built our preview for us) incl. in-use detection; `DELETE` same path removes.
+  Confirm-gated destructive wrapper; frees multi-GB downloads.
+- Memory/voice writes (branch-read): `DELETE /core/memory/<id>` (`all` clears
+  everything — destructive), `POST /core/voice/setup` (background ~156 MB
+  download, poll GET /core/voice; model_ensure-style preview).
+- Block-producer stake reporting (app 0.46.0–0.47.2): producing VHP vs held VHP,
+  share of network, expected block rate, stake-idle warning. Likely new fields on
+  existing node channels — verify they flow through `node_producer_status` /
+  `node_rewards_status` and update fake shapes.
+- Large unwrapped families on the live branch, each needing a security read
+  before any wrapping: `code/*` (project runner + GitHub incl. push/PR —
+  effectively code execution), `email/*` (send!), `calendar/*`, `agents/*`
+  (defs/run/input/stop), generic `tools/call`, `search`, `fetch`, `transcribe`,
+  `update`, `mcp/runtime`. Account family stays unwrapped (interactive auth +
+  wallet linking).
 
 - ~~npm publish~~ Done 2026-08-17: `koinos-ai-mcp@0.2.0` live on npm (maintainer
   `hung0v3r`; publishes need the browser security-key flow, so run `npm publish`
