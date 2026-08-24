@@ -84,7 +84,15 @@ GET/POST /core/keys               API key management (hashed at rest)
 DELETE /core/keys/<id>            revoke a key
 POST /core/keys/<id>/budget       {budgetUsdMonthly} per-key spending cap — spec §34
                                   "spending limits" shipped             [new in 0.25.x]
-POST     /core/feedback           in-app feedback
+POST     /core/feedback           in-app feedback: {message ≤4000 (silently
+                                  truncated upstream!), email? ≤200, includeLog?}
+                                  → relays to koinosai.com/api/feedback with
+                                  appVersion + platform attached; includeLog adds
+                                  the last ~120 core.log lines (events only — no
+                                  chat content, no keys, per upstream comment);
+                                  502 {ok:false, error:{message}} if the relay is
+                                  unreachable. Shape from core/server.js @
+                                  v0.42.0; live-verified 2026-08-22.
 POST     /core/chat/completions   the UI's own chat lane — deliberately separate from
                                   /v1 so creating an external key can't lock the app
                                   out of its own chat

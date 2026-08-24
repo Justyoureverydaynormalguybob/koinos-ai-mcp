@@ -55,6 +55,7 @@ test("tools/list exposes the full read surface", async () => {
       "earn_start",
       "earn_status",
       "earn_stop",
+      "feedback_send",
       "health",
       "key_create",
       "key_revoke",
@@ -711,6 +712,46 @@ test("teams and bench: reads, gates, and SSE aggregation", async () => {
       arguments: { enabled: true, confirm: true },
     });
     assert.equal(JSON.parse(dev.content[0].text).enabled, true);
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("feedback_send gates, quotes the message, and posts the right body", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    const preview = await client.callTool({
+      name: "feedback_send",
+      arguments: { message: "the tool picker labels are noisy", email: "a@b.c" },
+    });
+    const previewData = JSON.parse(preview.content[0].text);
+    assert.equal(previewData.executed, false);
+    assert.match(previewData.wouldDo, /Koinos AI team/);
+    assert.match(previewData.wouldDo, /reply-to a@b\.c/);
+    assert.match(previewData.wouldDo, /the tool picker labels are noisy/);
+    assert.deepEqual(node.requests.filter((r) => r.method === "POST"), []);
+
+    const sent = await client.callTool({
+      name: "feedback_send",
+      arguments: { message: " the tool picker labels are noisy ", includeLog: true, confirm: true },
+    });
+    assert.notEqual(sent.isError, true, sent.content?.[0]?.text);
+    assert.equal(node.requests.at(-1).path, "/core/feedback");
+    assert.deepEqual(JSON.parse(node.requests.at(-1).body), {
+      message: "the tool picker labels are noisy", // trimmed
+      includeLog: true,
+    });
+
+    // The node silently truncates at 4000 chars — we refuse instead.
+    const tooLong = await client.callTool({
+      name: "feedback_send",
+      arguments: { message: "x".repeat(4001), confirm: true },
+    });
+    assert.equal(tooLong.isError, true);
+    assert.match(tooLong.content[0].text, /truncates at 4000/);
+    assert.equal(node.requests.filter((r) => r.method === "POST").length, 1);
   } finally {
     await close();
     await node.close();

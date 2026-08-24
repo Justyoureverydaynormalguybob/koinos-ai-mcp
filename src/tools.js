@@ -1138,4 +1138,53 @@ export const tools = [
       );
     },
   },
+  {
+    name: "feedback_send",
+    description:
+      "MUTATING and OUTWARD-FACING — sends written feedback to the Koinos AI " +
+      "team through the node's own feedback relay (leaves this machine for " +
+      "koinosai.com; the node attaches its app version and platform). " +
+      "Optional email adds a reply address; includeLog attaches the node's " +
+      "recent event log — events only, upstream includes no chat content and " +
+      "no keys. Max 4000 chars. Compose the message with the user first. " +
+      "Requires confirm: true.",
+    annotations: { readOnlyHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "The feedback text (max 4000 chars)" },
+        email: { type: "string", description: "Optional reply-to email address" },
+        includeLog: {
+          type: "boolean",
+          description: "Attach the node's recent event-log tail (no chat content or keys)",
+        },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["message"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      const message = String(args.message ?? "").trim();
+      if (!message) throw new Error("Missing required argument: message (non-empty string)");
+      // The node silently slices at 4000 — refuse instead of losing the tail.
+      if (message.length > 4000) {
+        throw new Error(`Feedback is ${message.length} chars; the node truncates at 4000. Shorten it.`);
+      }
+      return (
+        confirmGate(
+          args,
+          "Send this feedback to the Koinos AI team" +
+            (args.email ? `, reply-to ${args.email}` : "") +
+            (args.includeLog ? ", with the node's event-log tail attached" : "") +
+            `: "${message}"`,
+        ) ??
+        client.post("/core/feedback", {
+          message,
+          ...(args.email !== undefined ? { email: args.email } : {}),
+          ...(args.includeLog !== undefined ? { includeLog: args.includeLog } : {}),
+        })
+      );
+    },
+  },
 ];

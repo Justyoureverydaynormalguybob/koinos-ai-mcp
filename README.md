@@ -126,6 +126,7 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `node_start` / `node_stop` / `node_quick_sync` | **mutating** | Run the blockchain node; the quick-sync preview reports the ~63 GB download and disk needs before anything starts |
 | `chain_burn` | **mutating** | Burn KOIN→VHP at your own address (irreversible, enables block production); preview reports the max burnable first |
 | `key_create` / `key_revoke` / `key_set_budget` | **mutating** | API keys for `/v1/*`, with per-key monthly network spending caps |
+| `feedback_send` | **mutating** | Send written feedback to the Koinos AI team via the node's relay (optional reply email / event-log tail) |
 
 Every mutating tool requires `confirm: true`. Called without it, **nothing changes** —
 the tool returns a preview of what would happen, so an agent must state intent before

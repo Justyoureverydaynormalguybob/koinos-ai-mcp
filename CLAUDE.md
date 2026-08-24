@@ -27,7 +27,7 @@ already OpenAI-compatible, so every existing client can use it directly.
 - `src/nodes.js` — client pool; resolves the optional `node` tool argument
 - `src/client.js` — HTTP client; the API key lives in a private field and is asserted
   (by test) never to appear in error messages
-- `src/tools.js` — the tool registry: 13 read-only + 16 confirm-gated mutating tools
+- `src/tools.js` — the tool registry: 22 read-only + 25 confirm-gated mutating tools
 - `src/release.js` — GitHub latest-release lookup for the `nodes_status` update
   check: cached 10 min, fail-soft, 3s timeout; the server's ONLY outbound call
   beyond the configured nodes (`KOINOS_AI_NO_VERSION_CHECK=1` disables,
@@ -98,8 +98,6 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       2026-08-16: reported 0.25.8/up-to-date). Import/remove/nudge deliberately
       not live-probed (no spare GGUF; nudge needs a wallet).
 
-Test suite: 30 green via `npm test`.
-
 - [x] M8 — the embedded Koinos blockchain node (app v0.28+, `POST /core/koinos/rpc`
       channel dispatch). 7 read tools (status, setup, dashboard, balances, reburn,
       producer, logs) + 4 confirm-gated (start, stop, quick-sync with a
@@ -126,6 +124,14 @@ Test suite: 30 green via `npm test`.
       v0.29.1 incl. a real writer→critic team run (2 model calls, 10s). Account
       endpoints deliberately unwrapped (interactive auth + wallet-key signing).
       45 tools, 37 tests. v0.5.0.
+
+- [x] feedback_send (2026-08-22): confirm-gated wrapper for `POST /core/feedback`
+      `{message ≤4000, email?, includeLog?}` — OUTWARD-FACING (the node relays to
+      koinosai.com with appVersion+platform attached), so the preview quotes the
+      full message; refuses >4000 chars because upstream silently truncates.
+      Shape from core/server.js @ v0.42.0; endpoint live-verified the same day
+      (sent real feedback about the app's MCP tool-picker labels). Hidden in
+      HTTP read-only mode like every mutating tool. 47 tools, 38 tests. v0.5.2.
 
 ## Ideas / backlog
 

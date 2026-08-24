@@ -192,6 +192,7 @@ export function startFakeNode({ routes } = {}) {
       },
       "/core/dev": { status: 200, body: { ok: true, enabled: false } },
       "POST /core/dev": { status: 200, body: { ok: true, enabled: true } },
+      "POST /core/feedback": { status: 200, body: { ok: true } },
       "POST /core/teams/run": {
         status: 200,
         body: 'data: {"trace":{"stage":"plan","note":"split into 2"}}\n\ndata: {"trace":{"stage":"write","note":"drafting"}}\n\ndata: {"done":true,"answer":"42","modelCalls":7}\n\n',
