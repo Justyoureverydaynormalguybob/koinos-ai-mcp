@@ -67,6 +67,11 @@ Bearer token. Multi-node deployments use `KOINOS_AI_API_KEY_<NAME>` per node.
 
 ### From your phone (HTTP mode)
 
+Since app v0.50 the app itself can publish its OpenAI-compatible `/v1` API at a
+public address (`remote_access_set`) — but that carries **only** `/v1` chat, never
+the control plane. To operate the node remotely (earnings, models, tasks), you
+still want this server's HTTP mode through a tunnel:
+
 Claude's mobile/web custom connectors can reach your node through a tunnel:
 
 ```sh
@@ -112,6 +117,7 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `chat_get` | read-only | One chat with the full transcript |
 | `docs_list` / `doc_get` | read-only | Stored documents |
 | `keys_list` | read-only | API key metadata + whether auth is required (keys hashed upstream) |
+| `remote_access_status` | read-only | Whether the `/v1` API is published at its public address (app v0.50+), connection state, base URL |
 | `mcp_servers_list` | read-only | MCP servers registered in the app: connection state, tool names, one-click catalog (registration itself is deliberately not writable from here) |
 | `memory_list` | read-only | Memories the app has stored for its agents/chats (app v0.48+) |
 | `voice_status` | read-only | Voice-mode state: installed or not, download size if not (app v0.48+) |
@@ -130,6 +136,7 @@ and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
 | `chain_burn` | **mutating** | Burn KOIN→VHP at your own address (irreversible, enables block production); preview reports the max burnable first |
 | `key_create` / `key_revoke` / `key_set_budget` | **mutating** | API keys for `/v1/*`, with per-key monthly network spending caps |
 | `feedback_send` | **mutating** | Send written feedback to the Koinos AI team via the node's relay (optional reply email / event-log tail) |
+| `remote_access_set` | **mutating** | Publish the `/v1` API at a stable public address via the koinosai.com relay, or kill it; key-gated upstream, only `/v1` ever crosses |
 
 Every mutating tool requires `confirm: true`. Called without it, **nothing changes** —
 the tool returns a preview of what would happen, so an agent must state intent before

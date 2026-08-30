@@ -27,7 +27,7 @@ already OpenAI-compatible, so every existing client can use it directly.
 - `src/nodes.js` — client pool; resolves the optional `node` tool argument
 - `src/client.js` — HTTP client; the API key lives in a private field and is asserted
   (by test) never to appear in error messages
-- `src/tools.js` — the tool registry: 25 read-only + 25 confirm-gated mutating tools
+- `src/tools.js` — the tool registry: 26 read-only + 26 confirm-gated mutating tools
 - `src/release.js` — GitHub latest-release lookup for the `nodes_status` update
   check: cached 10 min, fail-soft, 3s timeout; the server's ONLY outbound call
   beyond the configured nodes (`KOINOS_AI_NO_VERSION_CHECK=1` disables,
@@ -151,6 +151,18 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       branch, and the changelog moved to koinosai.com/updates — both now in
       Conventions. Memory/voice write shapes since read from the branch (see
       backlog). 50 tools, 39 tests. v0.6.0.
+
+- [x] M12 — 0.49/0.50 keep-up (2026-08-30): `remote_access_status` +
+      confirm-gated `remote_access_set` (app 0.50's /v1 public address via the
+      koinosai.com relay; enabling is OUTWARD-FACING and the preview says so;
+      upstream hard-gates on an API key existing, and only /v1 ever crosses the
+      relay — control plane stays localhost, per remote-access.js on the live
+      branch). earn_status now documents the 0.49 courtesy pause
+      (worker.backoff/backoffReason = paused on purpose, not broken) and
+      modelGate; fake worker shape refreshed from a live 0.50.1 capture.
+      Reads + unconfirmed-set preview live-verified on v0.50.1 (2026-08-30);
+      the confirmed flip deliberately not fired against the live node.
+      52 tools, 40 tests. v0.7.0.
 
 ## Ideas / backlog
 

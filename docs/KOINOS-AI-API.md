@@ -308,6 +308,29 @@ Probed 404 on 0.48.0 (do not exist yet): `/core/agents` (GET — the runner is
 POST `/core/agents/run` only), `/core/mcp/servers`, `/core/updates`,
 `/core/skills`, `/core/search`, `/core/plugins`.
 
+## Observed live responses (v0.50.1, 2026-08-30)
+
+`GET /core/remote` → `{ ok, enabled, state, base, tunnelId }` — remote access
+for the Local API (app 0.50.x, "Your API, from anywhere"). Observed off:
+`{enabled: false, state: "off", base: null, tunnelId: null}`. `POST /core/remote`
+`{enabled: bool}` → same shape (`state: "connecting"` on the way up); 400
+"Create an API key first…" when no key exists — the module's one hard gate
+(no key = gateway answers everyone = never fine on the internet). From
+`remote-access.js` on the live branch: **only `/v1/*` ever crosses the relay**
+— the relay refuses everything else and each request's path is re-checked
+locally ("trust, but verify the free hop"). Traffic transits koinosai.com;
+the stable tunnel token lives in settings (`remote.token`).
+
+`GET /core/earn` → `worker` has grown since the 0.23.3 capture above:
+`{running, scheduler, modelGate: [{alias, advertised, reasonCode, reason}],
+ramGb, producer, producerNote, backoff, backoffReason, jobsDone,
+receiptsAccepted, since, lastPollOkAt, lastJobAt, lastError}`.
+`backoff`/`backoffReason` are the 0.49 courtesy pause — earning paused itself
+because the owner's programs need the GPU (NVIDIA-only trigger), auto-resumes
+after ~2 min quiet; render it as "paused on purpose", never as a fault.
+`wallet` also carries `ethAddress` now. `earnings` includes `pendingReceipts`,
+`tokensProcessed`, `pendingKai`, `usage`, `freeTokensRemaining`.
+
 ## Runtime ladder
 
 CUDA → Vulkan → CPU → Ollama fallback. Ollama adapter expects `127.0.0.1:11434`

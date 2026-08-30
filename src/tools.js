@@ -129,7 +129,11 @@ export const tools = [
     description:
       "Get the node's earning status (read-only): whether the earn worker is " +
       "running, jobs completed, receipts accepted, scheduler URL, earnings, " +
-      "and wallet summary (exists/unlocked/address only — never key material).",
+      "and wallet summary (exists/unlocked/address only — never key material). " +
+      "worker.backoff true means earning paused ITSELF because the machine " +
+      "is busy (courtesy pause, app v0.49+; auto-resumes) — paused on " +
+      "purpose, not broken. worker.modelGate explains per model whether it " +
+      "is advertised to the network and why not.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/earn"),
   },
@@ -219,6 +223,17 @@ export const tools = [
       "hashed at rest upstream; no secret material is available or returned.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/keys"),
+  },
+  {
+    name: "remote_access_status",
+    description:
+      "Get the Local API's remote-access state (read-only, app v0.50+): " +
+      "whether the node's OpenAI-compatible /v1 API is published at a stable " +
+      "public address through the koinosai.com relay — enabled, connection " +
+      "state, public base URL, and tunnel id. Only /v1 ever crosses the " +
+      "relay; this control plane stays localhost-only. Changes nothing.",
+    inputSchema: NO_INPUT,
+    handler: (client) => client.get("/core/remote"),
   },
   {
     name: "mcp_servers_list",
@@ -842,6 +857,42 @@ export const tools = [
             : `Cap API key ${args.id} at $${budget}/month of network spend ` +
               "(local inference stays free and ungated).",
         ) ?? client.post(`/core/keys/${requireId(args)}/budget`, { budgetUsdMonthly: budget })
+      );
+    },
+  },
+  {
+    name: "remote_access_set",
+    description:
+      "MUTATING, and OUTWARD-FACING when enabling — publishes the node's " +
+      "OpenAI-compatible /v1 API at a stable public address, tunnelled " +
+      "through the koinosai.com relay (traffic transits their " +
+      "infrastructure). The node refuses to enable it until an API key " +
+      "exists, so the public address never serves unauthenticated callers; " +
+      "only /v1 crosses — the control plane and files stay on this machine. " +
+      "Disabling kills the public address immediately. Requires confirm: true.",
+    annotations: { readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean", description: "true = publish, false = go dark" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
+      required: ["enabled"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      if (typeof args.enabled !== "boolean") throw new Error("enabled must be true or false");
+      return (
+        confirmGate(
+          args,
+          args.enabled
+            ? "Publish this node's /v1 API at its stable public address via " +
+              "the koinosai.com relay. Callers still need an API key; only " +
+              "/v1 crosses — the control plane stays local. The node refuses " +
+              "if no API key exists yet."
+            : "Turn remote access OFF — the public address goes dead immediately.",
+        ) ?? client.post("/core/remote", { enabled: args.enabled })
       );
     },
   },

@@ -42,7 +42,24 @@ export const FAKE_MODELS = {
 export const FAKE_EARN = {
   ok: true,
   wallet: { exists: false, unlocked: false, address: null, createdAt: null },
-  worker: { running: false, jobsDone: 0, receiptsAccepted: 0 },
+  // Worker shape observed live on v0.50.1 (2026-08-30): modelGate/ramGb/
+  // producer* since 0.46–0.47, backoff/backoffReason (courtesy pause) since 0.49.
+  worker: {
+    running: false,
+    scheduler: "https://koinosai.com/scheduler",
+    modelGate: [{ alias: "koinos-fast", advertised: true, reasonCode: null, reason: null }],
+    ramGb: 16,
+    producer: null,
+    producerNote: null,
+    backoff: false,
+    backoffReason: null,
+    jobsDone: 0,
+    receiptsAccepted: 0,
+    since: null,
+    lastPollOkAt: null,
+    lastJobAt: null,
+    lastError: null,
+  },
   schedulerUrl: "https://koinosai.com/scheduler",
   earnings: null,
 };
@@ -134,6 +151,16 @@ export function startFakeNode({ routes } = {}) {
       "/core/chats/chat1": { status: 200, body: { ok: true, chat: FAKE_CHAT } },
       "/core/docs": { status: 200, body: { ok: true, docs: [] } },
       "/core/keys": { status: 200, body: { ok: true, required: false, keys: [] } },
+      // Remote access (0.50.x): GET shape observed live on v0.50.1 (2026-08-30);
+      // POST shape from remote-access.js on the live branch.
+      "/core/remote": {
+        status: 200,
+        body: { ok: true, enabled: false, state: "off", base: null, tunnelId: null },
+      },
+      "POST /core/remote": {
+        status: 200,
+        body: { ok: true, enabled: true, state: "connecting", base: null, tunnelId: "tun_fake1" },
+      },
       // MCP registry, memory, voice — shapes observed live on v0.48.0 (2026-08-24).
       "/core/mcp": {
         status: 200,

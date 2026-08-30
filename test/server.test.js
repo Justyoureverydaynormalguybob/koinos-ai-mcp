@@ -83,6 +83,8 @@ test("tools/list exposes the full read surface", async () => {
       "node_status",
       "node_stop",
       "nodes_status",
+      "remote_access_set",
+      "remote_access_status",
       "task_create",
       "task_delete",
       "task_run_now",
@@ -159,7 +161,8 @@ test("read tools return live node data", async () => {
   const { client, close } = await connect(node.url);
   try {
     for (const [name, probe] of [
-      ["earn_status", (d) => d.worker.running === false],
+      ["earn_status", (d) => d.worker.running === false && d.worker.backoff === false],
+      ["remote_access_status", (d) => d.enabled === false && d.state === "off"],
       ["network_status", (d) => d.privacyMode === "local-only"],
       ["network_models", (d) => d.workersOnline === 3 && d.models.length === 3],
       ["network_overview", (d) => d.reachable === true && d.workers[0].perf.jobs === 26],
@@ -199,6 +202,7 @@ test("mutating tools without confirm change nothing and return a preview", async
       ["earn_nudge", {}],
       ["model_import", { path: "C:\\models\\tiny.gguf" }],
       ["model_remove_custom", { alias: "custom-tiny" }],
+      ["remote_access_set", { enabled: true }],
     ]) {
       const result = await client.callTool({ name, arguments: args });
       assert.notEqual(result.isError, true, name);
@@ -740,6 +744,46 @@ test("mcp_servers_list keeps registry metadata but strips tool schemas", async (
     // Catalog and node-runtime info pass through untouched.
     assert.equal(data.catalog[0].id, "filesystem");
     assert.equal(data.node.available, true);
+  } finally {
+    await close();
+    await node.close();
+  }
+});
+
+test("remote_access_set warns about the relay when enabling, then posts the flip", async () => {
+  const node = await startFakeNode();
+  const { client, close } = await connect(node.url);
+  try {
+    const preview = await client.callTool({
+      name: "remote_access_set",
+      arguments: { enabled: true },
+    });
+    const previewData = JSON.parse(preview.content[0].text);
+    assert.equal(previewData.executed, false);
+    assert.match(previewData.wouldDo, /public address/);
+    assert.match(previewData.wouldDo, /koinosai\.com relay/);
+    assert.deepEqual(node.requests.filter((r) => r.method === "POST"), []);
+
+    const on = await client.callTool({
+      name: "remote_access_set",
+      arguments: { enabled: true, confirm: true },
+    });
+    assert.equal(JSON.parse(on.content[0].text).state, "connecting");
+
+    const offPreview = await client.callTool({
+      name: "remote_access_set",
+      arguments: { enabled: false },
+    });
+    assert.match(JSON.parse(offPreview.content[0].text).wouldDo, /goes dead immediately/);
+    await client.callTool({
+      name: "remote_access_set",
+      arguments: { enabled: false, confirm: true },
+    });
+
+    const writes = node.requests.filter((r) => r.method === "POST");
+    assert.deepEqual(writes.map((r) => r.path), ["/core/remote", "/core/remote"]);
+    assert.deepEqual(JSON.parse(writes[0].body), { enabled: true });
+    assert.deepEqual(JSON.parse(writes[1].body), { enabled: false });
   } finally {
     await close();
     await node.close();
