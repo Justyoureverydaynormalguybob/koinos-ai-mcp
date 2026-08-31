@@ -189,10 +189,11 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
   from an interactive terminal). `npx -y koinos-ai-mcp` verified on Windows.
   Next: pitch inclusion in the Koinos AI app's one-click MCP catalog (it pins
   npm versions, so this was the prerequisite).
-- Upstream contribution candidates, in their repo not this one: CORS headers on the
-  gateway (currently absent, blocks browser clients), an embedding model catalog entry
-  (`/v1/embeddings` exists with nothing to serve it), tidier 404s for missing chat/doc
-  ids (currently leak local filesystem paths).
+- Upstream contribution candidates, in their repo not this one: an embedding model
+  catalog entry (`/v1/embeddings` exists with nothing to serve it), tidier 404s for
+  missing chat/doc ids (currently leak local filesystem paths). CORS headers were a
+  candidate until app 0.51.0 — refusing browsers is now deliberate policy
+  (`_sameSite`, see the API doc), so don't propose it.
 
 ## Relationship to Koinos AI
 

@@ -27,6 +27,10 @@ it the source of truth that every release must update in the same session it
 ships. **Check it first when the app version jumps**, then probe the live node
 for the shapes behind whatever it announces.
 
+**Route inventory re-read from that branch at app 0.51.0 (2026-08-31)** — 102 `/core/*`
+paths; nothing wrapped here changed shape, and 0.51.0 added no control-plane route
+(its close-to-tray switch lives in the Electron main process).
+
 ## Transport
 
 | | |
@@ -34,9 +38,34 @@ for the shapes behind whatever it announces.
 | Bind | `127.0.0.1` — localhost only, always |
 | Port | `41100` (override with env `KAI_CORE_PORT`) |
 | Auth | `Authorization: Bearer <key>` on `/v1/*` |
-| CORS | **None implemented.** No `Access-Control-*` headers anywhere. Browser clients will fail. |
+| CORS | **None implemented.** No `Access-Control-*` headers anywhere. |
+| Cross-site | **Refused** since app 0.51.0 — a browser cannot call either family. See below. |
 
 Two route families on one port.
+
+### The cross-site guard (app 0.51.0+)
+
+`gateway.js` → `_sameSite()`, run on every `/core/*` and `/v1/*` request:
+
+- a `Sec-Fetch-Site` other than `same-origin` or `none` → refused;
+- an `Origin` that is not `http://127.0.0.1:<port>` or `http://localhost:<port>` → refused;
+- **an absent `Origin` passes** — the deliberate carve-out for local scripts, curl,
+  SDKs and the Electron main process. A browser cannot forge either header.
+
+`/core/*` refusals are `403 {ok: false, error: "Refused: this endpoint only answers
+Koinos AI itself, not another site."}`. `/v1/*` refusals are `403` with
+`error.code = "cross_site_refused"`.
+
+What it closed: `/core/*` carries no API key by design and `JSON.parse`s bodies
+without a content-type check, so a `text/plain` POST from any page the user happened
+to be visiting was a CORS-safelisted *simple* request — no preflight, reply unreadable,
+side effect real. That included `/core/tools/call`, whose `confirmed` flag comes
+straight off the request body.
+
+**This server is unaffected** (verified 2026-08-31): Node's `fetch` sends neither
+header on GET/POST/PATCH/DELETE. It *does* send `sec-fetch-mode: cors`, which the
+guard does not inspect — if that header ever joins the check, every tool here breaks
+at once.
 
 ## `/v1/*` — OpenAI-compatible (already usable by any OpenAI client)
 
