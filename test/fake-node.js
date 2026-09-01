@@ -41,9 +41,21 @@ export const FAKE_MODELS = {
 
 export const FAKE_EARN = {
   ok: true,
-  wallet: { exists: false, unlocked: false, address: null, createdAt: null },
-  // Worker shape observed live on v0.50.1 (2026-08-30): modelGate/ramGb/
+  // Existence/lock/address only — the node never returns key material here, and
+  // these values are synthetic. A wallet that exists but is locked, with a
+  // stopped worker that has earned before, is what exercises the whole shape.
+  wallet: {
+    exists: true,
+    unlocked: false,
+    address: "1FakeAddr",
+    ethAddress: "0xFakeEthAddr",
+    createdAt: "2026-08-18T10:21:20.682Z",
+  },
+  // Worker shape re-observed live on v0.52.0 (2026-09-01): modelGate/ramGb/
   // producer* since 0.46–0.47, backoff/backoffReason (courtesy pause) since 0.49.
+  // 0.52 made the node sign a wallet-ownership proof when it registers with the
+  // scheduler; that does NOT appear here. A node that cannot sign keeps earning
+  // and emits a worker:proof-failed event instead, so this shape is unchanged.
   worker: {
     running: false,
     scheduler: "https://koinosai.com/scheduler",
@@ -60,8 +72,24 @@ export const FAKE_EARN = {
     lastJobAt: null,
     lastError: null,
   },
+  // Sibling of `worker`, not part of it: the courtesy pause's own view of the
+  // machine. supported:false where utilisation cannot be sampled — which is
+  // what a live 0.52.0 Windows node reports, so `backoff` above stays the
+  // field that actually says whether earning is paused.
+  guard: { supported: false, paused: false, lastUtilPct: null, pausedSince: null, pauses: 0 },
   schedulerUrl: "https://koinosai.com/scheduler",
-  earnings: null,
+  // Populated shape observed live on v0.52.0. KAI amounts are decimal strings,
+  // not numbers — never parse them as floats. Synthetic values.
+  earnings: {
+    kai: "12.34567890",
+    pendingReceipts: 0,
+    tokensProcessed: 0,
+    pendingKai: "0.00000000",
+    usage: { inputTokens: 0, outputTokens: 0, costUsd: "0.000000" },
+    freeTokensRemaining: 25000,
+    balanceUsd: "0.000000",
+    spentThisEpochKai: "0",
+  },
 };
 export const FAKE_NETWORK = {
   ok: true,
@@ -303,9 +331,41 @@ export function startFakeNode({ routes } = {}) {
         status: 200,
         body: { ok: true, data: { address: "1FakeAddr", koin: "12.5", vhp: "3", mana: "12.5" } },
       },
+      // Re-observed live on v0.52.0 (2026-09-01). `mode` is "burn" (compound
+      // into this wallet's own VHP) or "send" (to another address). 0.52 put a
+      // wallet-password requirement on the WRITE side — rewards:configure, when
+      // it arms or changes a send destination — because an armed return keeps
+      // moving value on its own. This read is unchanged and is the only rewards
+      // channel wrapped here; configure and runNow are policy-banned.
       "RPC rewards:status": {
         status: 200,
-        body: { ok: true, data: { config: { enabled: false, pct: 50, mode: "burn" }, running: false } },
+        body: {
+          ok: true,
+          data: {
+            config: {
+              enabled: false,
+              pct: 50,
+              mode: "burn",
+              toAddress: "",
+              minReturnKoin: "1",
+              maxReturnKoin: "0",
+              pollMinutes: 10,
+            },
+            running: false,
+            nextRunAt: null,
+            last: null,
+            derived: {
+              anchored: false,
+              lifetimeRewards: "0",
+              rewardsSinceEnable: "0",
+              returned: "0",
+              pending: "0",
+              actions: [],
+            },
+            network: "mainnet",
+            address: "1FakeAddr",
+          },
+        },
       },
       "RPC producer:status": {
         status: 200,

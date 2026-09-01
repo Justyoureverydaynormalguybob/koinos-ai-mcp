@@ -841,8 +841,24 @@ test("the value-moving node channels are never referenced by any tool", async ()
     "fund:bridge",
     "fund:routeC",
     "fund:buyUrl",
+    // Arming a return to another address is a STANDING instruction to send every
+    // future block reward there — worse than a one-off send, not better. App
+    // 0.52.0 classified it as value-moving by requiring the wallet password on
+    // the call; runNow fires the same transfer immediately. rewards:status (the
+    // read) stays wrapped.
+    "rewards:configure",
+    "rewards:runNow",
+    // The wallet family is unwrapped at any confirmation level. Banning only the
+    // HTTP paths left the same key material reachable through the channel
+    // dispatch that M8 wrapped — nodeRpc(client, "wallet:revealWif") would have
+    // passed this test.
     "wallet/reveal",
     "wallet/restore",
+    "wallet:create",
+    "wallet:import",
+    "wallet:unlock",
+    "wallet:revealWif",
+    "wallet:remove",
   ]) {
     assert.equal(src.includes(forbidden), false, `tools.js must never reference ${forbidden}`);
   }

@@ -164,6 +164,23 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       the confirmed flip deliberately not fired against the live node.
       52 tools, 40 tests. v0.7.0.
 
+- [x] 0.51/0.52 keep-up (2026-08-31 → 09-01): **no new tools — both releases are
+      security work in families we don't wrap.** 0.51.0 closed a CSRF hole by
+      refusing cross-site callers on `/core/*` and `/v1/*` (`gateway.js`
+      `_sameSite`); header-less callers still pass, so this server is unaffected
+      — verified on the wire (Node `fetch` sends no `Origin`/`Sec-Fetch-Site`)
+      and then live against a running 0.52.0 node. It also made refusing
+      browsers deliberate policy, which killed the CORS upstream-contribution
+      idea. 0.52.0 password-gated `rewards:configure` and made the earn worker
+      sign a wallet-ownership proof at scheduler registration (an event, not a
+      status field — `earn_status` shape unchanged). Guardrail widened: the
+      never-wrapped channel test now also bans `rewards:configure`,
+      `rewards:runNow` and the `wallet:*` channels — it previously banned only
+      the wallet HTTP paths, leaving the same key material reachable through the
+      M8 channel dispatch. Fake shapes refreshed from the live 0.52.0 capture
+      (`guard`, populated `earnings`, full `rewards:status`). Still 52 tools,
+      40 tests.
+
 ## Ideas / backlog
 
 - Model uninstall (app 0.43.0) — shapes read from the live branch:

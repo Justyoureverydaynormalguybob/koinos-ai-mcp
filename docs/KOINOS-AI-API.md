@@ -29,7 +29,12 @@ for the shapes behind whatever it announces.
 
 **Route inventory re-read from that branch at app 0.51.0 (2026-08-31)** — 102 `/core/*`
 paths; nothing wrapped here changed shape, and 0.51.0 added no control-plane route
-(its close-to-tray switch lives in the Electron main process).
+(its close-to-tray switch lives in the Electron main process). `gateway.js` is
+byte-identical at 0.52.0, whose changes live in the koinos channels and the earn
+worker instead. **Live-verified against a running 0.52.0 node (2026-09-01)**:
+health, models, earn and `rewards:status` re-captured, and every `/core/*` call
+succeeded through this server — the 0.51.0 cross-site guard confirmed harmless to
+a header-less Node client in practice, not just on paper.
 
 ## Transport
 
@@ -170,15 +175,28 @@ Authorization header (keys-optional held for the control plane on a fresh instal
   model download, so health doubles as a download-progress signal.
 
 `GET /core/models` → `{ ok, aliases: [...] }` — **not** an installed/available split.
-Each alias: `{ alias, label, blurb, package, sizeBytes, license, minRamGb, status }`.
-`status` values observed: `partial` (mid-download), `absent`; `ready` presumed for
-installed. All three pins confirmed: `koinos-fast` = qwen2.5-1.5b-instruct-q4_k_m@1,
-`koinos-balanced` = llama-3.2-3b-instruct-q4_k_m@1, `koinos-smart` =
-qwen2.5-7b-instruct-q4_k_m@1.
+Each alias: `{ alias, label, blurb, package, sizeBytes, license, minRamGb, status }`,
+plus optional `vision: true` (gemma3-4b) and `dev: true` (dev-tiny, hidden unless
+developer tools are on). `status` values observed: `ready`, `partial`
+(mid-download), `absent` — all three confirmed live. All three pins confirmed:
+`koinos-fast` = qwen2.5-1.5b-instruct-q4_k_m@1, `koinos-balanced` =
+llama-3.2-3b-instruct-q4_k_m@1, `koinos-smart` = qwen2.5-7b-instruct-q4_k_m@1 —
+and since 0.52.0 the `blurb` text names those models rather than only describing
+what each alias is for, so blurb strings changed for the three Koinos aliases.
 
-`GET /core/earn` → `{ ok, wallet: {exists, unlocked, address, createdAt},
-worker: {running, jobsDone, receiptsAccepted}, schedulerUrl, earnings }` — the wallet
-*summary* lives here; there is no separate wallet GET.
+`GET /core/earn` → `{ ok, wallet: {exists, unlocked, address, ethAddress,
+createdAt}, worker, guard, schedulerUrl, earnings }` — the wallet *summary* lives
+here; there is no separate wallet GET.
+
+`worker` (live 0.52.0): `{running, scheduler, modelGate, ramGb, producer,
+producerNote, backoff, backoffReason, jobsDone, receiptsAccepted, since,
+lastPollOkAt, lastJobAt, lastError}`. `guard` is its sibling, not a member:
+`{supported, paused, lastUtilPct, pausedSince, pauses}` — `supported:false` on a
+machine where utilisation cannot be sampled, which is why `worker.backoff` is the
+field that actually says whether earning is paused. `earnings` is `null` before a
+wallet exists, otherwise `{kai, pendingReceipts, tokensProcessed, pendingKai,
+usage: {inputTokens, outputTokens, costUsd}, freeTokensRemaining, balanceUsd,
+spentThisEpochKai}` — **KAI amounts are decimal strings, not numbers.**
 
 `GET /core/network` → `{ ok, privacyMode, schedulerUrl, walletUnlocked }` — the
 privacy-mode **read** is here, not under /core/network/config.
@@ -293,9 +311,30 @@ RPC — no local node needed), `rewards:status`, `producer:status`,
 freeBytes}`), `chain:maxBurn`. `chain:burn` takes `{amount}` (human format).
 `node:logs` 400s plainly without Docker.
 
+`rewards:status` re-observed on v0.52.0 (2026-09-01): `{config: {enabled, pct,
+mode, toAddress, minReturnKoin, maxReturnKoin, pollMinutes}, running, nextRunAt,
+last, derived: {anchored, lifetimeRewards, rewardsSinceEnable, returned, pending,
+actions}, network, address}`. `mode` is `burn` (compound into this wallet's own
+VHP) or `send` (to another address).
+
 Value-moving channels — `chain:send`, `fund:ethSend`/`usdtSend`/`vkoinSend`,
 `fund:bridge*`, `fund:routeC*`, `fund:buyUrl` — require the wallet password
 per call upstream and are **never wrapped** here, per policy.
+
+**App 0.52.0 added `rewards:configure` (and `rewards:runNow`) to that set.**
+Arming an automatic return in `send` mode now proves the wallet password,
+because a standing instruction that keeps moving value unattended is a bigger
+authority than the one-off send that already asked. Percentage, minimum, cap,
+interval, pausing and `burn` mode ask for nothing — none of them can move value
+to an address the wallet does not already own. Both channels are policy-banned
+here and the ban is enforced by test.
+
+Also in 0.52.0, **the earn worker signs a wallet-ownership proof** when it
+registers with the scheduler — `sha256("register|<address>|<ts>")` — closing a
+hole where anyone reaching the scheduler could register under someone else's
+address and collect their jobs. It does not surface in `/core/earn`: a node that
+cannot sign keeps earning and emits a `worker:proof-failed` event instead, so
+the `earn_status` shape is unchanged (verified live on 0.52.0).
 
 ## Privacy modes (what's actually implemented)
 
