@@ -399,6 +399,48 @@ after ~2 min quiet; render it as "paused on purpose", never as a fault.
 `wallet` also carries `ethAddress` now. `earnings` includes `pendingReceipts`,
 `tokensProcessed`, `pendingKai`, `usage`, `freeTokensRemaining`.
 
+## Observed live responses (v0.54.1, 2026-09-10)
+
+Releases 0.53.0 → 0.54.1 (2026-09-03/04) per `updates.json`: address QR codes
+and the pairing-code fix (UI only), background data-folder size counting (the
+unwrapped `data-move` family), a macOS build, and one change that reaches a
+wrapped endpoint:
+
+`GET /core/earn` gained a top-level `producerReport` sibling of `worker` /
+`guard`: `{running, reported, lastSentAt, lastError, lastSkip}` — from
+`core/lib/producer-reporter.js` on the live branch (`ProducerReporter.status()`,
+attached in `core/server.js`). The Koinos node now reports itself to the
+koinosai.com dashboard on a 5-minute timer (first report 45s after boot)
+**independently of the Earn toggle**; the scheduler drops the row after 30 min
+of silence. Exactly one reporter speaks: when the earn worker is running it
+carries the same snapshot and this one skips. `lastSkip` is the reason no
+report is going out, in this precedence: `"local-only privacy mode"` (§29
+strict — a local-only machine emits nothing) → `"no scheduler URL"` →
+`"earning worker is reporting"` → `"wallet locked"` (signing needs the key in
+memory) → `null` when it should be sending. Every one is a legitimate quiet
+state; render it as an explanation, not an error. Observed live with earning
+on: `{running: true, reported: false, lastSentAt: null, lastError: null,
+lastSkip: "earning worker is reporting"}`. Outward-facing only in the
+non-local-only case, and it is a signed status post (`wallet.signHash`), not
+a value-moving channel — nothing new to ban.
+
+Also in 0.54.0: the managed Koinos node's JSON-RPC moved from `127.0.0.1:8080`
+to **`127.0.0.1:8085`** (`core/lib/koinos/constants.js` `localRpcUrl`,
+`ports.jsonrpc`). Nothing in this repo touches that port — the app reaches its
+own node through the `/core/koinos/rpc` channel dispatch — but external tools
+pointed at 8080 need repointing and the node needs one restart after updating.
+
+Live quirk: the first `node:status` dispatch after the app has been idle can
+exceed this client's 10s default while the app cold-probes Docker; the retry
+answered normally. `worker.producerNote: "Could not read the node's log: spawn
+docker ENOENT"` means Docker is not on the app's PATH (node stopped), not a
+gateway fault.
+
+Branch check the same day: `claude/koinos-ai-takeover-co25fw` is still the
+shipping source (`package.json` 0.54.1, last commit 2026-09-06); the newer
+`claude/kai-brain-awareness`, `claude/kai-workflow-canvas` and
+`codex/connected-companion-plan` branches are feature work not yet in a release.
+
 ## Runtime ladder
 
 CUDA → Vulkan → CPU → Ollama fallback. Ollama adapter expects `127.0.0.1:11434`

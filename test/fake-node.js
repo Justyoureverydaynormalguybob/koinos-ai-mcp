@@ -90,6 +90,20 @@ export const FAKE_EARN = {
     balanceUsd: "0.000000",
     spentThisEpochKai: "0",
   },
+  // New in 0.54.0 (observed live on 0.54.1, 2026-09-10): the Koinos node
+  // reports itself to the koinosai.com dashboard on its own timer, so a
+  // healthy node no longer vanishes from the dashboard when Earning is off.
+  // `lastSkip` is the reason no report is going out — "local-only privacy
+  // mode" | "no scheduler URL" | "earning worker is reporting" | "wallet
+  // locked" — every one a legitimate quiet state, not a fault. Shape from
+  // core/lib/producer-reporter.js `status()` on the live branch.
+  producerReport: {
+    running: true,
+    reported: false,
+    lastSentAt: null,
+    lastError: null,
+    lastSkip: "wallet locked",
+  },
 };
 export const FAKE_NETWORK = {
   ok: true,

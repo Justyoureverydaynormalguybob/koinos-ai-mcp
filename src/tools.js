@@ -133,7 +133,11 @@ export const tools = [
       "worker.backoff true means earning paused ITSELF because the machine " +
       "is busy (courtesy pause, app v0.49+; auto-resumes) — paused on " +
       "purpose, not broken. worker.modelGate explains per model whether it " +
-      "is advertised to the network and why not.",
+      "is advertised to the network and why not. producerReport (app v0.54+) " +
+      "is the blockchain node's own report to the koinosai.com dashboard, " +
+      "independent of earning; producerReport.lastSkip says why the node is " +
+      "NOT on the dashboard (local-only privacy, no scheduler URL, earning " +
+      "worker already reporting, wallet locked) — all normal quiet states.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/earn"),
   },

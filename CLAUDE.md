@@ -181,6 +181,18 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       (`guard`, populated `earnings`, full `rewards:status`). Still 52 tools,
       40 tests.
 
+- [x] 0.53/0.54 keep-up (2026-09-10): **no new tools.** 0.53.x is UI (address
+      QR codes, pairing-code rendering) and the unwrapped data-move family;
+      0.54.0 is the macOS build, the managed node's JSON-RPC moving 8080→8085
+      (nothing here touches it), and the one shape change that reaches us:
+      `GET /core/earn` grew a top-level `producerReport`
+      `{running, reported, lastSentAt, lastError, lastSkip}` — the Koinos node
+      now reports itself to the dashboard independently of the Earn toggle,
+      and `lastSkip` names why it is NOT on the dashboard (four legitimate
+      quiet states, see the API doc). Fake shape + `earn_status` description
+      updated; verified live on 0.54.1. Signed status post only, nothing new
+      to ban. Still 52 tools, 40 tests.
+
 ## Ideas / backlog
 
 - Model uninstall (app 0.43.0) — shapes read from the live branch:

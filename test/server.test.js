@@ -161,7 +161,7 @@ test("read tools return live node data", async () => {
   const { client, close } = await connect(node.url);
   try {
     for (const [name, probe] of [
-      ["earn_status", (d) => d.worker.running === false && d.worker.backoff === false],
+      ["earn_status", (d) => d.worker.running === false && d.worker.backoff === false && typeof d.producerReport.lastSkip === "string"],
       ["remote_access_status", (d) => d.enabled === false && d.state === "off"],
       ["network_status", (d) => d.privacyMode === "local-only"],
       ["network_models", (d) => d.workersOnline === 3 && d.models.length === 3],
