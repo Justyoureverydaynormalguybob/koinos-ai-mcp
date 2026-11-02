@@ -1,49 +1,97 @@
-// A fake Koinos AI node for tests: a bare node:http server that records
+// A fake KAI Core node for tests: a bare node:http server that records
 // requests and serves canned /core/* responses, in the spirit of upstream's
 // fake llama-server integration tests.
+//
+// Shapes mirror real responses captured from a live KAI Core Beta node
+// (app 0.7.17, Core engine 0.7.2, 2026-11-02). Addresses, ids and balances
+// are synthetic.
 
 import { createServer } from "node:http";
 
-// Shapes mirror real responses observed from a live node (v0.23.3, 2026-08-15).
 export const FAKE_HEALTH = {
   ok: true,
-  version: "0.23.3",
-  hardware: { platform: "test", arch: "x64", cpu: { model: "fake", cores: 4 } },
+  version: "0.7.2",
+  channel: "core",
+  productName: "KAI Core Beta",
+  dataDir: "C:\\fake\\KAI Core\\foundation-v1",
+  hardware: {
+    platform: "test",
+    arch: "x64",
+    cpu: { model: "fake", cores: 4 },
+    ramBytes: 16487870464,
+    gpus: [{ vendor: "amd", name: "Fake GPU", vramMb: null, driver: null }],
+    disk: { freeBytes: 405153308672, totalBytes: 1022844989440 },
+    capabilities: { cudaEligible: false, vulkanEligible: true, metalEligible: false, cpuFallback: true },
+  },
   modules: {
     gateway: { ok: true, port: 41100 },
-    runtime: { activeAlias: null, loading: false, runtime: null, lastLoadError: null },
-    models: { ok: true, bytes: 0 },
+    runtime: {
+      activeAlias: null,
+      loading: false,
+      loadingAlias: null,
+      loadingStage: null,
+      inference: { activeAlias: null, queued: 0 },
+      runtime: null,
+      lastLoadError: null,
+    },
+    models: { ok: true, bytes: 0, dir: "C:\\fake\\models" },
   },
 };
+
 export const FAKE_MODELS = {
   ok: true,
   aliases: [
     {
       alias: "koinos-fast",
-      label: "Koinos Fast",
+      label: "Qwen 2.5 1.5B",
+      blurb: "Qwen 2.5 1.5B — quick answers on any machine · 1 GB",
       package: "qwen2.5-1.5b-instruct-q4_k_m@1",
       sizeBytes: 986048768,
+      downloadSizeBytes: 986048768,
+      diskBytes: 986048768,
       license: "apache-2.0",
-      minRamGb: 4,
+      minRamGb: 3,
       status: "ready",
     },
     {
-      alias: "koinos-balanced",
-      label: "Koinos Balanced",
-      package: "llama-3.2-3b-instruct-q4_k_m@1",
-      sizeBytes: 2019377696,
-      license: "llama3.2",
+      alias: "gemma3-4b",
+      label: "Gemma 3 4B",
+      blurb: "Google — sharp for its size · 2.5 GB",
+      package: "google_gemma-3-4b-it-q4_k_m@1",
+      sizeBytes: 2489758112,
+      downloadSizeBytes: 3341009216,
+      diskBytes: 0,
+      license: "gemma",
       minRamGb: 8,
       status: "absent",
+      vision: true,
     },
   ],
+  storage: { bytes: 986048768, dir: "C:\\fake\\models" },
+  runtime: FAKE_HEALTH.modules.runtime,
+  download: null,
+  importing: null,
+  importError: null,
+  runtimeDownload: null,
+  modelQueue: [],
+  ensure: null,
+};
+
+// GET /core/models/installed/<packageId> — Core's removal plan.
+export const FAKE_REMOVAL_PLAN = {
+  ok: true,
+  kind: "downloaded",
+  label: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+  deletesFiles: ["C:\\fake\\models\\Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"],
+  keepsFile: null,
+  freesBytes: 986048768,
+  redownloadable: true,
+  inUse: false,
 };
 
 export const FAKE_EARN = {
   ok: true,
-  // Existence/lock/address only — the node never returns key material here, and
-  // these values are synthetic. A wallet that exists but is locked, with a
-  // stopped worker that has earned before, is what exercises the whole shape.
+  // Existence/lock/address only — the node never returns key material here.
   wallet: {
     exists: true,
     unlocked: false,
@@ -51,37 +99,15 @@ export const FAKE_EARN = {
     ethAddress: "0xFakeEthAddr",
     createdAt: "2026-08-18T10:21:20.682Z",
   },
-  // Worker shape re-observed live on v0.52.0 (2026-09-01): modelGate/ramGb/
-  // producer* since 0.46–0.47, backoff/backoffReason (courtesy pause) since 0.49.
-  // 0.52 made the node sign a wallet-ownership proof when it registers with the
-  // scheduler; that does NOT appear here. A node that cannot sign keeps earning
-  // and emits a worker:proof-failed event instead, so this shape is unchanged.
-  worker: {
-    running: false,
-    scheduler: "https://koinosai.com/scheduler",
-    modelGate: [{ alias: "koinos-fast", advertised: true, reasonCode: null, reason: null }],
-    ramGb: 16,
-    producer: null,
-    producerNote: null,
-    backoff: false,
-    backoffReason: null,
-    jobsDone: 0,
-    receiptsAccepted: 0,
-    since: null,
-    lastPollOkAt: null,
-    lastJobAt: null,
-    lastError: null,
-  },
-  // Sibling of `worker`, not part of it: the courtesy pause's own view of the
-  // machine. supported:false where utilisation cannot be sampled — which is
-  // what a live 0.52.0 Windows node reports, so `backoff` above stays the
-  // field that actually says whether earning is paused.
-  guard: { supported: false, paused: false, lastUtilPct: null, pausedSince: null, pauses: 0 },
+  worker: { running: false, jobsDone: 0, receiptsAccepted: 0 },
+  guard: null,
   schedulerUrl: "https://koinosai.com/scheduler",
-  // Populated shape observed live on v0.52.0. KAI amounts are decimal strings,
-  // not numbers — never parse them as floats. Synthetic values.
+  // The legacy Testnet KAI balance. Decimal strings — never parse as floats.
   earnings: {
+    address: "1FakeAddr",
     kai: "12.34567890",
+    observedAt: 1793655693351,
+    koinShadow: false,
     pendingReceipts: 0,
     tokensProcessed: 0,
     pendingKai: "0.00000000",
@@ -90,82 +116,108 @@ export const FAKE_EARN = {
     balanceUsd: "0.000000",
     spentThisEpochKai: "0",
   },
-  // New in 0.54.0 (observed live on 0.54.1, 2026-09-10): the Koinos node
-  // reports itself to the koinosai.com dashboard on its own timer, so a
-  // healthy node no longer vanishes from the dashboard when Earning is off.
-  // `lastSkip` is the reason no report is going out — "local-only privacy
-  // mode" | "no scheduler URL" | "earning worker is reporting" | "wallet
-  // locked" — every one a legitimate quiet state, not a fault. Shape from
-  // core/lib/producer-reporter.js `status()` on the live branch.
-  producerReport: {
-    running: true,
-    reported: false,
-    lastSentAt: null,
-    lastError: null,
-    lastSkip: "wallet locked",
+  // Core Beta: mainnet KOIN earning, rehearsed in shadow mode for now.
+  koin: {
+    schema: 1,
+    mode: "shadow",
+    asset: "KOIN",
+    paymentsEnabled: false,
+    claimable: null,
+    usageCredit: null,
+    estimate: null,
+    qualification: "unavailable",
+    policy: {
+      version: 1,
+      dailyBps: 500,
+      availabilityBps: 7000,
+      revenueRewardBps: 6000,
+      revenueMiningBps: 2500,
+      revenueOperationsBps: 1500,
+      workCapBps: 8000,
+      noticeMs: 172800000,
+      reviewMs: 86400000,
+    },
   },
+  // Node reporting moved into the separate Koinos Node plugin.
+  producerReport: { enabled: false, state: "plugin-managed" },
 };
+
 export const FAKE_NETWORK = {
   ok: true,
   privacyMode: "local-only",
   schedulerUrl: "https://koinosai.com/scheduler",
   walletUnlocked: false,
+  koinRehearsal: false,
 };
-// Shapes observed live on v0.25.8 (2026-08-16). Both endpoints are fail-soft
-// upstream: scheduler unreachable → empty models/workers, not an error.
+
+// Both network reads are fail-soft upstream: scheduler unreachable → empty
+// models/workers, not an error.
 export const FAKE_NETWORK_MODELS = {
   ok: true,
   workersOnline: 3,
   models: [
-    { model: "koinos-fast", providers: 3 },
-    { model: "koinos-balanced", providers: 2 },
-    { model: "qwen25-32b", providers: 1 },
+    { model: "gemma3-4b", providers: 1, inUsdPerM: 0.2, outUsdPerM: 0.8, ctxTokens: 4096 },
+    { model: "koinos-fast", providers: 2, inUsdPerM: 0.1, outUsdPerM: 0.4, ctxTokens: 4096 },
   ],
 };
 export const FAKE_NETWORK_OVERVIEW = {
   ok: true,
   reachable: true,
-  instance: "i_50e07d94",
-  bootAt: "2026-08-16T08:22:43.428Z",
+  instance: "i_fake0001",
+  bootAt: "2026-11-02T20:05:04.242Z",
   workersOnline: 3,
+  workersUnsigned: 0,
+  workerProofEnforced: false,
   models: FAKE_NETWORK_MODELS.models,
-  recentOffline: [],
+  recentOffline: [{ addr: "1Offl…", lastSeenSecs: 2231, models: 3 }],
   workers: [
     {
       // Addresses arrive pre-truncated by the scheduler.
-      address: "1AUgCZ…AXHo",
-      models: ["koinos-fast", "qwen25-32b"],
-      lastSeenSecs: 4,
+      address: "1Fake…Wrk1",
+      models: ["koinos-fast"],
+      ram: 34,
+      lastSeenSecs: 1,
       busy: false,
-      perf: { jobs: 26, tokPerSec: 3.83, cuRating: 0.192 },
+      perf: { jobs: 26, tokPerSec: 2.44, cuRating: 0.122, ok: 26, sr: 0.998 },
       jobsThisEpoch: 4,
+      reputation: { r: 0.663, ageDays: 51.5, gated: true, elig: 0.15 },
+      proof: "signed",
     },
   ],
-  queueDepth: 0,
-  pendingJobs: 0,
 };
-export const FAKE_CHAT = {
-  id: "chat1",
-  title: "hello",
-  renamed: false,
-  createdAt: "2026-08-15T22:42:24.388Z",
-  updatedAt: "2026-08-15T22:42:24.390Z",
-  messages: [
-    { role: "user", content: "hello" },
-    { role: "assistant", content: "hi there" },
-  ],
-};
-export const FAKE_CHATS = {
+
+export const FAKE_ACCOUNT_CREDITS = {
   ok: true,
-  chats: [
-    {
-      id: "chat1",
-      title: "hello",
-      updatedAt: "2026-08-15T22:42:24.390Z",
-      messages: 2,
-      searchText: "hello hi there — a large transcript dump we must not relay",
-    },
-  ],
+  site: "https://credits.koinosai.com",
+  tokenStored: true,
+  credsEncrypted: true,
+  secureStorage: { available: true, state: "protected", protection: "operating-system" },
+  sessionOnly: false,
+  authScope: "wallet-credits",
+  signedIn: true,
+  account: {
+    id: "acc_fake",
+    scope: "wallet-credits",
+    freeOnly: false,
+    wallets: [{ address: "1FakeAddr", linkedAt: 1793654471620 }],
+    expiresAt: 1796246471406,
+  },
+  thisWalletLinked: true,
+  thisWalletGrant: null,
+  scope: "credits",
+  separateCreditAccount: true,
+};
+export const FAKE_ACCOUNT_WEBSITE = {
+  ok: true,
+  site: "https://koinosai.com",
+  tokenStored: false,
+  credsEncrypted: true,
+  secureStorage: { available: true, state: "protected" },
+  sessionOnly: false,
+  authScope: "account",
+  signedIn: false,
+  scope: "website",
+  separateCreditAccount: true,
 };
 
 export function startFakeNode({ routes } = {}) {
@@ -180,6 +232,7 @@ export function startFakeNode({ routes } = {}) {
       body: Buffer.concat(chunks).toString("utf8") || null,
     });
 
+    const qwen = `/core/models/installed/${encodeURIComponent("qwen2.5-1.5b-instruct-q4_k_m@1")}`;
     // Method-prefixed keys ("POST /core/x") win; bare keys match any method.
     const table = {
       "/core/health": { status: 200, body: FAKE_HEALTH },
@@ -188,234 +241,38 @@ export function startFakeNode({ routes } = {}) {
       "/core/network": { status: 200, body: FAKE_NETWORK },
       "/core/network/models": { status: 200, body: FAKE_NETWORK_MODELS },
       "/core/network/status": { status: 200, body: FAKE_NETWORK_OVERVIEW },
-      "/core/tasks": { status: 200, body: { ok: true, tasks: [] } },
-      "/core/chats": { status: 200, body: FAKE_CHATS },
-      "/core/chats/chat1": { status: 200, body: { ok: true, chat: FAKE_CHAT } },
-      "/core/docs": { status: 200, body: { ok: true, docs: [] } },
-      "/core/keys": { status: 200, body: { ok: true, required: false, keys: [] } },
-      // Remote access (0.50.x): GET shape observed live on v0.50.1 (2026-08-30);
-      // POST shape from remote-access.js on the live branch.
-      "/core/remote": {
+      "/core/account": { status: 200, body: FAKE_ACCOUNT_CREDITS },
+      "/core/website-account": { status: 200, body: FAKE_ACCOUNT_WEBSITE },
+      [`GET ${qwen}`]: { status: 200, body: FAKE_REMOVAL_PLAN },
+      [`DELETE ${qwen}`]: {
         status: 200,
-        body: { ok: true, enabled: false, state: "off", base: null, tunnelId: null },
+        body: { ok: true, removed: true, kind: "downloaded", freedBytes: 986048768 },
       },
-      "POST /core/remote": {
-        status: 200,
-        body: { ok: true, enabled: true, state: "connecting", base: null, tunnelId: "tun_fake1" },
-      },
-      // MCP registry, memory, voice — shapes observed live on v0.48.0 (2026-08-24).
-      "/core/mcp": {
-        status: 200,
-        body: {
-          ok: true,
-          servers: [
-            {
-              id: "srvmsxqbdxy249df8",
-              name: "koinos-ai-mcp",
-              transport: "stdio",
-              command: "node",
-              args: ["C:\\repo\\src\\index.js", "--compact"],
-              localSafe: true,
-              trusted: true,
-              autoConnect: true,
-              connected: true,
-              tools: [
-                {
-                  name: "health",
-                  description: "Check the node's health (read-only).",
-                  inputSchema: { type: "object", properties: {}, additionalProperties: false },
-                },
-                {
-                  name: "models_list",
-                  description: "List models (read-only).",
-                  inputSchema: { type: "object", properties: {}, additionalProperties: false },
-                },
-              ],
-            },
-          ],
-          catalog: [
-            {
-              id: "filesystem",
-              name: "Your files (folders you pick)",
-              description: "Let the AI read and write files in folders you choose.",
-              transport: "stdio",
-              command: "npx",
-              args: ["-y", "@modelcontextprotocol/server-filesystem@2026.7.10"],
-              requires: "node",
-            },
-          ],
-          node: { available: true, source: "system", version: "v23.5.0", installable: true },
-        },
-      },
-      "/core/memory": { status: 200, body: { ok: true, memories: [] } },
-      "/core/voice": {
-        status: 200,
-        body: {
-          ok: true,
-          available: false,
-          engine: false,
-          model: false,
-          installable: true,
-          downloadBytes: 156158656,
-          setup: null,
-        },
-      },
-      "POST /core/earn/start": { status: 200, body: { ok: true, worker: { running: true } } },
-      "POST /core/earn/stop": { status: 200, body: { ok: true, worker: { running: false } } },
+      "POST /core/earn/stop": { status: 200, body: { ...FAKE_EARN } },
       "POST /core/network/config": {
         status: 200,
-        body: { ok: true, privacyMode: "local-first", walletUnlocked: false },
+        body: { ok: true, privacyMode: "local-first", schedulerUrl: "https://koinosai.com/scheduler", walletUnlocked: false, koinRehearsal: false },
       },
+      // Core 0.7.x answers 202 with the queued job.
       "POST /core/models/ensure": {
-        status: 200,
-        body: { ok: true, started: true, alias: "koinos-balanced" },
+        status: 202,
+        body: { ok: true, started: true, alias: "gemma3-4b", job: { alias: "gemma3-4b", state: "queued" }, modelQueue: [] },
       },
-      "POST /core/models/download/cancel": { status: 200, body: { ok: true, cancelled: true } },
-      // Import replies done:false after ~800ms upstream; the UI polls
-      // GET /core/models (importing.pct / importError) for progress.
+      "POST /core/models/download/cancel": {
+        status: 200,
+        body: { ok: true, cancelled: true, modelQueue: [] },
+      },
+      // Import replies done:false after ~800ms upstream; poll GET /core/models.
       "POST /core/models/import": { status: 200, body: { ok: true, done: false } },
       "DELETE /core/models/custom/custom-tiny": { status: 200, body: { ok: true } },
-      "POST /core/earn/nudge": { status: 200, body: { ok: true } },
-      "POST /core/tasks": { status: 200, body: { ok: true, task: { id: "t123", name: "morning" } } },
-      "POST /core/tasks/t123/run": {
-        status: 200,
-        body: {
-          ok: true,
-          task: { id: "t123", lastRunAt: "2026-08-15T23:59:00.000Z", lastChatId: "chat1" },
-        },
-      },
-      "DELETE /core/tasks/t123": { status: 200, body: { ok: true, removed: true } },
-      "PATCH /core/tasks/t123": {
-        status: 200,
-        body: { ok: true, task: { id: "t123", enabled: false } },
-      },
-      "PATCH /core/chats/chat1": { status: 200, body: { ok: true, id: "chat1", title: "renamed" } },
-      "DELETE /core/chats/chat1": { status: 200, body: { ok: true } },
-      // Key management (0.25.x): create returns the plaintext secret once.
-      "POST /core/keys": {
-        status: 200,
-        body: { ok: true, id: "key_ab12cd34ef56", name: "ci", secret: "kai_sk_test-shown-once" },
-      },
-      "DELETE /core/keys/key_ab12cd34ef56": { status: 200, body: { ok: true, revoked: true } },
-      "POST /core/keys/key_ab12cd34ef56/budget": {
-        status: 200,
-        body: { ok: true, id: "key_ab12cd34ef56", budgetUsdMonthly: 5 },
-      },
-      // AI Teams / bench / dev switch (shapes observed live on app v0.29.1).
-      "/core/teams": {
-        status: 200,
-        body: {
-          ok: true,
-          templates: [
-            { id: "research", label: "Research team", tools: ["web_search"], stages: ["plan", "work", "write", "critique", "revise"] },
-            { id: "write-review", label: "Write & review", tools: ["write_file"], stages: ["write", "critique", "revise"] },
-          ],
-        },
-      },
-      "/core/bench": {
-        status: 200,
-        body: { ok: true, suites: [{ id: "core", label: "Core starter suite", cases: [{ id: "arithmetic", kind: "chat" }] }], enabled: false },
-      },
-      "/core/dev": { status: 200, body: { ok: true, enabled: false } },
-      "POST /core/dev": { status: 200, body: { ok: true, enabled: true } },
       "POST /core/feedback": { status: 200, body: { ok: true } },
-      "POST /core/teams/run": {
-        status: 200,
-        body: 'data: {"trace":{"stage":"plan","note":"split into 2"}}\n\ndata: {"trace":{"stage":"write","note":"drafting"}}\n\ndata: {"done":true,"answer":"42","modelCalls":7}\n\n',
-      },
-      "POST /core/bench/run": {
-        status: 200,
-        body: 'data: {"case":{"id":"arithmetic","pass":true}}\n\ndata: {"done":true,"summary":{"passed":9,"total":10,"score":0.9}}\n\n',
-      },
-      // Koinos node RPC channels (shapes observed live on app v0.28.4);
-      // dispatched on body.channel via the "RPC <channel>" key form below.
-      "RPC node:status": {
-        status: 200,
-        body: { ok: true, data: { network: "mainnet", docker: { ok: false, error: "Docker was not found." }, isRunning: false, services: [] } },
-      },
-      "RPC setup:status": {
-        status: 200,
-        body: { ok: true, data: { platform: "test", wsl: { installed: true }, docker: { installed: false, running: false }, ready: false } },
-      },
-      "RPC dashboard:summary": {
-        status: 200,
-        body: { ok: true, data: { network: { id: "mainnet" }, wallet: { exists: true, unlocked: true, address: "1FakeAddr" }, node: { isRunning: false } } },
-      },
-      "RPC chain:balances": {
-        status: 200,
-        body: { ok: true, data: { address: "1FakeAddr", koin: "12.5", vhp: "3", mana: "12.5" } },
-      },
-      // Re-observed live on v0.52.0 (2026-09-01). `mode` is "burn" (compound
-      // into this wallet's own VHP) or "send" (to another address). 0.52 put a
-      // wallet-password requirement on the WRITE side — rewards:configure, when
-      // it arms or changes a send destination — because an armed return keeps
-      // moving value on its own. This read is unchanged and is the only rewards
-      // channel wrapped here; configure and runNow are policy-banned.
-      "RPC rewards:status": {
-        status: 200,
-        body: {
-          ok: true,
-          data: {
-            config: {
-              enabled: false,
-              pct: 50,
-              mode: "burn",
-              toAddress: "",
-              minReturnKoin: "1",
-              maxReturnKoin: "0",
-              pollMinutes: 10,
-            },
-            running: false,
-            nextRunAt: null,
-            last: null,
-            derived: {
-              anchored: false,
-              lifetimeRewards: "0",
-              rewardsSinceEnable: "0",
-              returned: "0",
-              pending: "0",
-              actions: [],
-            },
-            network: "mainnet",
-            address: "1FakeAddr",
-          },
-        },
-      },
-      "RPC producer:status": {
-        status: 200,
-        body: { ok: true, data: { address: "1FakeAddr", registeredPublicKey: null, matches: false } },
-      },
-      "RPC node:logs": { status: 200, body: { ok: true, data: { lines: ["fake node log line"] } } },
-      "RPC node:quickSyncInfo": {
-        status: 200,
-        body: { ok: true, data: { archiveBytes: 63493141880, requiredBytes: 165082168888, freeBytes: 451197222912 } },
-      },
-      "RPC chain:maxBurn": {
-        status: 200,
-        body: { ok: true, data: { maxSat: "1250000000", maxFormatted: "12.5", manaLimited: false, manaFormatted: "12.5" } },
-      },
-      "RPC node:start": { status: 200, body: { ok: true, data: { started: true } } },
-      "RPC node:stop": { status: 200, body: { ok: true, data: { stopped: true } } },
-      "RPC node:quickSync": { status: 200, body: { ok: true, data: { started: true } } },
-      "RPC chain:burn": {
-        status: 200,
-        body: { ok: true, data: { txId: "0xfakeburn", amountSat: "500000000", amountFormatted: "5" } },
-      },
       ...routes,
     };
-    let key = `${req.method} ${req.url}`;
-    if (req.method === "POST" && req.url === "/core/koinos/rpc") {
-      try {
-        key = `RPC ${JSON.parse(requests.at(-1).body || "{}").channel}`;
-      } catch {
-        /* fall through to the plain key */
-      }
-    }
-    const route = table[key] ?? table[req.url];
+    const route = table[`${req.method} ${req.url}`] ?? table[req.url];
 
     if (!route) {
       res.writeHead(404, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "not found" }));
+      res.end(JSON.stringify({ error: { message: "Not found", type: "invalid_request_error" } }));
       return;
     }
     if (route.hang) return; // never respond — for timeout tests

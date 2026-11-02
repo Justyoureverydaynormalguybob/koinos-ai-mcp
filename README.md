@@ -1,34 +1,30 @@
 # koinos-ai-mcp
 
-An [MCP](https://modelcontextprotocol.io) server for [Koinos AI](https://koinosai.com) —
-operate a Koinos AI node from Claude Code, or any MCP client.
+An [MCP](https://modelcontextprotocol.io) server for [KAI](https://koinosai.com) (KAI Core Beta, formerly Koinos AI). It lets you operate a KAI node from Claude Code or any MCP client.
 
-> **Status: working.** Full read surface (node, earnings, compute network) plus guarded
-> write surface (earning, privacy mode, models, scheduled tasks, chats, API keys with
-> spending caps), verified against a live node (app v0.25.8). See
-> [`CLAUDE.md`](CLAUDE.md) for the build plan.
+> **Status: 1.0.0, for KAI Core Beta (app 0.7.17+).** Covers everything Core still serves on its local control plane: health, models (including uninstall), the compute network, privacy mode, earning status, account status and feedback. Verified against a live Core node on 2026-11-02.
+>
+> **On the Alpha app (0.54.x)?** Stay on `koinos-ai-mcp@0.7` for now. Core moved tasks, chats, documents, keys, memory, voice, AI Teams, the blockchain node and remote access out of the control plane into separately installed plugins, so 1.0 doesn't carry those tools.
+>
+> **Want those features from an agent on Core?** They're only reachable through a plugin. See the companion **[MCP Bridge](https://github.com/Justyoureverydaynormalguybob/kai-plugin-mcp)** plugin, which runs inside KAI and asks you in the KAI window before any change.
 
 ## Why
 
-Koinos AI runs LLMs locally on your own hardware and can sell your idle GPU time to a
-compute network. It exposes a local control plane on `127.0.0.1:41100` — start/stop earning,
-check the wallet, swap models, set privacy mode, manage scheduled tasks — but the only thing
-that talks to it is the app's own window. One machine, one human, clicking.
+KAI runs LLMs locally on your own hardware and can sell idle compute to a network. Its local control plane on `127.0.0.1:41100` handles models, privacy and earning, but normally only the KAI window talks to it.
 
-This wraps that control plane in MCP, so you can instead say:
+This server wraps that control plane in MCP, so you can say:
 
-> *"How much did my machine earn overnight?"*
-> *"Stop earning, I need the GPU."*
-> *"Set me to Local-Only — nothing leaves this machine today."*
-> *"Which of my three nodes is idle?"*
+> *"Is my node up, and which model is loaded?"*
+> *"Free some disk: what would removing the 7B coder model give me back?"*
+> *"Set me to Local-Only, nothing leaves this machine today."*
+> *"Which of my three machines is idle?"*
 
-Chat itself is deliberately **not** wrapped: Koinos AI's `/v1/chat/completions` is already
-OpenAI-compatible, so every existing client can use it as-is.
+Chat is deliberately **not** wrapped. KAI's `/v1/chat/completions` is already OpenAI-compatible, so every existing client can use it as-is.
 
 ## Requirements
 
-- Node ≥ 22
-- A running Koinos AI node ([install](https://github.com/therexdev/kaiapp/releases/latest))
+- Node 22 or later
+- A running KAI Core node ([download](https://koinosai.com))
 
 ## Install
 
@@ -52,44 +48,32 @@ Or in any MCP client config:
 }
 ```
 
-Or run from a checkout (`git clone`, `npm install && npm test`) and point the client at
-`node /path/to/koinos-ai-mcp/src/index.js` instead.
+Or run from a checkout (`git clone`, `npm install && npm test`) and point the client at `node /path/to/koinos-ai-mcp/src/index.js`.
 
-Configuration (all optional): `KOINOS_AI_BASE_URL` (default `http://127.0.0.1:41100`,
-honours upstream's `KAI_CORE_PORT`), `KOINOS_AI_API_KEY` (sent as a Bearer token when set),
-`KOINOS_AI_TIMEOUT_MS` (default `10000`), `KOINOS_AI_NO_VERSION_CHECK=1` (skip the
-`nodes_status` update check against the latest GitHub release — the server's only
-outbound call beyond your own nodes; it's cached and fail-soft).
+Configuration (all optional):
+- `KOINOS_AI_BASE_URL`: default `http://127.0.0.1:41100`; honours Core's `KAI_CORE_PORT`.
+- `KOINOS_AI_API_KEY`: sent as a Bearer token when set.
+- `KOINOS_AI_TIMEOUT_MS`: default `10000`.
 
-Running a hardened/headless Core with `KAI_CORE_TOKEN` set (app v0.29.2+)? Set
-`KOINOS_AI_API_KEY` to the same value — every request already carries it as a
-Bearer token. Multi-node deployments use `KOINOS_AI_API_KEY_<NAME>` per node.
+This server makes no outbound calls beyond your own nodes. The 0.x update check is gone, because Core updates itself in-app and its API reports an engine version that doesn't match the app release.
+
+Running a hardened or headless Core with `KAI_CORE_TOKEN` set? Set `KOINOS_AI_API_KEY` to the same value; every request already carries it as a Bearer token. Multi-node setups use `KOINOS_AI_API_KEY_<NAME>` per node.
 
 ### From your phone (HTTP mode)
-
-Since app v0.50 the app itself can publish its OpenAI-compatible `/v1` API at a
-public address (`remote_access_set`) — but that carries **only** `/v1` chat, never
-the control plane. To operate the node remotely (earnings, models, tasks), you
-still want this server's HTTP mode through a tunnel:
-
-Claude's mobile/web custom connectors can reach your node through a tunnel:
 
 ```sh
 # on the machine next to the node — read-only by default
 set KOINOS_AI_HTTP_TOKEN=<a long random secret>
 npx -y koinos-ai-mcp --http 8721
-# then expose it (no account needed for a quick tunnel):
 cloudflared tunnel --url http://127.0.0.1:8721
 ```
 
-Add the printed `https://…trycloudflare.com/<token>/mcp` URL as a custom
-connector in Claude (Settings → Connectors), and your phone can ask "how's my
-node?" from anywhere.
+Add the printed `https://…trycloudflare.com/<token>/mcp` URL as a custom connector in Claude (Settings → Connectors).
 
-Security posture: binds `127.0.0.1` only (exposure is the tunnel's job); the
-endpoint hides behind the capability token — anything else is a bare 404;
-and HTTP mode is **read-only** — mutating tools are absent and refused —
-unless you opt in with `--http-writes`. The machine must be awake to answer.
+Security:
+- It binds to `127.0.0.1` only; exposure is the tunnel's job.
+- The endpoint hides behind the capability token, and anything else gets a bare 404.
+- HTTP mode is **read-only**: mutating tools are absent and refused unless you opt in with `--http-writes`.
 
 ### More than one machine
 
@@ -97,113 +81,53 @@ unless you opt in with `--http-writes`. The machine must be awake to answer.
 "env": { "KOINOS_AI_NODES": "desktop=http://127.0.0.1:41100,laptop=http://192.168.1.20:41100" }
 ```
 
-The first entry is the default. Every tool takes an optional `node` argument
-("stop earning on the laptop"), `nodes_status` aggregates all of them concurrently,
-and a per-node API key can be set with `KOINOS_AI_API_KEY_<NAME>`.
+The first entry is the default. Every tool takes an optional `node` argument, and `nodes_status` checks all of them at once.
 
 ## Tools
 
 | Tool | Kind | What it does |
 |---|---|---|
-| `nodes_status` | read-only | One view across every configured machine: reachability, version (with update flag), model, earning, privacy |
-| `health` | read-only | Node status: version, hardware, runtime, model storage (doubles as download progress) |
-| `models_list` | read-only | Model alias catalog with package pins, sizes, licenses, per-alias status |
-| `earn_status` | read-only | Earn worker state, jobs, receipts, earnings, wallet summary (never key material) |
+| `nodes_status` | read-only | One view across every configured machine: reachability, version, model, earning, wallet lock state, privacy |
+| `health` | read-only | Core version, hardware, runtime (active model, loading stage, queue), model storage |
+| `models_list` | read-only | The model catalog with download size, bytes on disk, licence, RAM needs and status, plus the preparation queue |
+| `earn_status` | read-only | Earn worker, legacy Testnet KAI balance, the mainnet KOIN view (shadow mode, reward policy), wallet summary (never key material) |
 | `network_status` | read-only | Privacy mode, scheduler URL, wallet lock state |
-| `network_models` | read-only | What the compute network can serve right now, with provider counts |
-| `network_overview` | read-only | Live network view: workers online, per-worker models + perf, queue depth |
-| `tasks_list` | read-only | Scheduled tasks |
-| `chats_list` | read-only | Chat list (transcripts omitted for brevity) |
-| `chat_get` | read-only | One chat with the full transcript |
-| `docs_list` / `doc_get` | read-only | Stored documents |
-| `keys_list` | read-only | API key metadata + whether auth is required (keys hashed upstream) |
-| `remote_access_status` | read-only | Whether the `/v1` API is published at its public address (app v0.50+), connection state, base URL |
-| `mcp_servers_list` | read-only | MCP servers registered in the app: connection state, tool names, one-click catalog (registration itself is deliberately not writable from here) |
-| `memory_list` | read-only | Memories the app has stored for its agents/chats (app v0.48+) |
-| `voice_status` | read-only | Voice-mode state: installed or not, download size if not (app v0.48+) |
-| `earn_start` / `earn_stop` | **mutating** | Start/stop selling idle compute for KAI |
-| `earn_nudge` | **mutating** | Re-register with the scheduler now (node dropped off after OS standby) |
+| `network_models` | read-only | What the compute network can serve right now, with provider counts and prices |
+| `network_overview` | read-only | Live network view: workers online, per-worker models, performance and reputation |
+| `account_status` | read-only | KAI account sign-in state (credits or website account), linked wallets; never the session token |
 | `network_set_privacy_mode` | **mutating** | Change privacy posture (local-only / local-first / network) |
-| `model_ensure` / `model_download_cancel` | **mutating** | Download+load a model by alias (preview reports the size first); abort a stalled download without a restart |
-| `model_import` / `model_remove_custom` | **mutating** | Register (or deregister) your own GGUF file as a custom model — the file is referenced in place, never copied or deleted |
-| `task_create` / `task_run_now` / `task_delete` / `task_set_enabled` | **mutating** | Manage scheduled prompts; `task_run_now` returns the model's answer |
-| `chat_rename` / `chat_delete` | **mutating** | Rename or permanently delete a chat conversation |
-| `node_status` / `node_setup_status` / `node_dashboard` / `node_balances` / `node_rewards_status` / `node_producer_status` / `node_logs` | read-only | The embedded Koinos blockchain node (app v0.28+): Docker/setup state, dashboard, on-chain KOIN/VHP/mana balances, auto-reburn, producer registration |
-| `teams_list` / `bench_list` | read-only | AI Team templates and benchmark suites available on the node (app v0.28.8+) |
-| `team_run` | **mutating** | Run a role-pipeline AI Team on the local model (budgeted upstream; sandboxed-code consent is a separate explicit flag) |
-| `bench_run` / `dev_tools_set` | **mutating** | Objective model benchmark + the Developer-tools switch that gates it |
-| `node_start` / `node_stop` / `node_quick_sync` | **mutating** | Run the blockchain node; the quick-sync preview reports the ~63 GB download and disk needs before anything starts |
-| `chain_burn` | **mutating** | Burn KOIN→VHP at your own address (irreversible, enables block production); preview reports the max burnable first |
-| `key_create` / `key_revoke` / `key_set_budget` | **mutating** | API keys for `/v1/*`, with per-key monthly network spending caps |
-| `feedback_send` | **mutating** | Send written feedback to the Koinos AI team via the node's relay (optional reply email / event-log tail) |
-| `remote_access_set` | **mutating** | Publish the `/v1` API at a stable public address via the koinosai.com relay, or kill it; key-gated upstream, only `/v1` ever crosses |
+| `model_ensure` / `model_download_cancel` | **mutating** | Queue a model download and load (the preview reports the size first); cancel a queued or running preparation |
+| `model_uninstall` | **mutating, destructive** | Delete a downloaded model's files; the preview is Core's own removal plan (files, disk freed, whether it's loaded) |
+| `model_import` / `model_remove_custom` | **mutating** | Register or deregister your own GGUF; the file is referenced in place, never copied or deleted |
+| `earn_stop` | **mutating** | Stop the earn worker (joining the network is done in the KAI window) |
+| `feedback_send` | **mutating** | Send written feedback to the KAI team via the node's relay |
 
-Every mutating tool requires `confirm: true`. Called without it, **nothing changes** —
-the tool returns a preview of what would happen, so an agent must state intent before
-acting (mirrors upstream's own Ask-First permission design).
+Every mutating tool requires `confirm: true`. Called without it, **nothing changes**: the tool returns a preview, so an agent has to state its intent before acting. This mirrors KAI's own Ask-First design.
 
 ## What it looks like
 
-Real output, real node (condensed). Asked to fetch a bigger model, the agent's
-first call comes back as a preview, not a download:
+Real output from a live Core node (condensed). Asked to free disk, the agent's first call is a preview built from Core's own removal plan:
 
 ```json
 {
   "executed": false,
   "requiresConfirmation": true,
-  "alias": "koinos-smart",
-  "size": "4.7 GB",
-  "wouldDo": "Download+load koinos-smart (4.7 GB, apache-2.0).",
-  "hint": "Nothing was downloaded. Tell the user the size and, once they agree, call again with confirm: true."
+  "packageId": "qwen2.5-coder-7b-instruct-q4_k_m@1",
+  "frees": "4.7 GB",
+  "wouldDo": "Delete qwen-coder-7b (qwen2.5-coder-7b-instruct-q4_k_m@1): 1 file(s), freeing 4.7 GB (it can be downloaded again later)."
 }
 ```
 
-Asked to create a morning task and test it, the agent creates it, runs it — the
-local model answers, on this machine — reads the result out of chat history, and
-cleans up:
-
-```json
-{ "role": "user",      "content": "Reply with exactly: KOINOS MCP OK" }
-{ "role": "assistant", "content": "KOINOS MCP OK" }
-```
-
-And `nodes_status` answers "which of my machines is idle?" in one call — an
-offline machine degrades instead of failing:
-
-```json
-{ "node": "desktop", "reachable": true,  "version": "0.23.3", "activeModel": "koinos-balanced",
-  "earning": { "running": false, "jobsDone": 0 }, "privacyMode": "local-only" }
-{ "node": "laptop",  "reachable": false, "error": "Could not reach the Koinos AI node… Is the Koinos AI app running?" }
-```
-
-A ~3-minute recording script covering all of this lives in
-[`docs/DEMO.md`](docs/DEMO.md).
-
 ## Safety
 
-- The wallet endpoints (create, unlock, reveal, restore, deposit) are **not wrapped at
-  all** — an agent cannot touch key material or move funds at any confirmation level.
-  The scheduler-URL setting is likewise unwrapped (repointing it is security-sensitive).
-- The same red line covers the embedded blockchain node's value-moving channels —
-  chain sends, ETH/USDT/vKOIN sends, bridges, swaps, and the onramp are never wrapped
-  (a test greps the source to keep it that way), and the node tools inherit the app's
-  server-side privacy gate: in Local-Only mode the whole node surface refuses.
-- Every mutating tool is confirm-gated (see above) and carries a blunt description of
-  exactly what it changes; `task_delete` and `chat_delete` are additionally flagged
-  destructive via MCP tool annotations.
-- No API keys or wallet material are logged or persisted by this server; the node's
-  API key lives in a private field and is asserted (by test) never to appear in errors.
-- `key_create` is the one place a secret passes through: the node returns the new
-  key's plaintext exactly once (only a hash is stored). The tool tells the agent to
-  hand it straight to the user, and its preview warns before the **first** key flips
-  `/v1/*` from open localhost access to required bearer auth.
+- The wallet endpoints (create, restore, reveal, unlock, lock, deposit), the scheduler-URL setting, and the account sign-in, wallet-link and spend-grant routes are **not wrapped at all**. A test greps the source to keep it that way.
+- Every mutating tool is confirm-gated and says plainly what it changes. `model_uninstall` is also flagged destructive in its MCP tool annotations.
+- No API keys or wallet material are logged or stored. The API key lives in a private field, and a test asserts it never appears in error messages.
 
-## Relationship to the Koinos AI project
+## Relationship to the KAI project
 
-Independent and unaffiliated. Built against the public app by reading its source; the
-reverse-engineered surface is documented in [`docs/KOINOS-AI-API.md`](docs/KOINOS-AI-API.md).
-Nothing here is endorsed by, or the responsibility of, the Koinos AI project.
+Independent and unaffiliated. Built against the shipping app by reading its source; the surface is documented in [`docs/KOINOS-AI-API.md`](docs/KOINOS-AI-API.md). Nothing here is endorsed by, or the responsibility of, the KAI project.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

@@ -1,18 +1,24 @@
 // Tool registry. Each tool: { name, description, inputSchema, handler }.
-// handler(client, args) returns a JSON-serializable value.
+// handler(client, args, pool) returns a JSON-serializable value.
 //
 // Names are snake_case only — MCP clients (incl. the Claude API) restrict tool
 // names to [a-zA-Z0-9_-], so dots are out.
 //
-// M1+M2 surface is read-only. M3 mutating tools follow upstream spec §34
-// (Ask First semantics): every one requires confirm: true, and a call without
-// it changes nothing — it returns a preview of what would happen. Wallet
-// endpoints that create, reveal, restore, unlock, or move funds are
-// deliberately not wrapped at any confirmation level.
-
-import { latestAppRelease, compareVersions } from "./release.js";
-
-const RUN_TIMEOUT_MS = 120_000;
+// Target: KAI Core Beta (0.7.x). Core's local control plane (/core/* on
+// 127.0.0.1:41100) is deliberately small — models, network/privacy, earn,
+// feedback and account status. Everything else the Alpha app served over
+// HTTP (tasks, chats, docs, keys, memory, voice, teams, the blockchain node,
+// remote access, MCP registry) moved into separately installed plugins that
+// talk to Core over its in-process plugin API, not HTTP. Those features are
+// reachable from an agent only through a plugin — see the companion
+// kai-plugin-mcp package.
+//
+// Mutating tools follow upstream spec §34 (Ask First): every one requires
+// confirm: true, and a call without it changes nothing — it returns a
+// preview. Wallet endpoints (create, restore, reveal, unlock, lock, deposit),
+// the scheduler-URL setting, and the account sign-in / wallet-link / spend-
+// grant routes are deliberately not wrapped at any confirmation level; a test
+// greps this file to keep it that way.
 
 const CONFIRM = {
   type: "boolean",
@@ -33,39 +39,6 @@ function confirmGate(args, wouldDo) {
   };
 }
 
-// The embedded Koinos blockchain node (app v0.28+) exposes one channel-
-// dispatched route. Privacy-gated server-side: in Local-Only mode every
-// channel refuses with a self-explaining error that we simply relay.
-function nodeRpc(client, channel, payload = {}) {
-  return client.post("/core/koinos/rpc", { channel, payload });
-}
-
-// Team and bench runs stream Server-Sent Events and end with a terminal
-// {done:...} event; the whole stream arrives as one text body once the run
-// finishes, so parsing is a line scan, not a live stream.
-function parseSse(text) {
-  const events = [];
-  for (const line of String(text).split(/\r?\n/)) {
-    if (line.startsWith("data: ")) {
-      try {
-        events.push(JSON.parse(line.slice(6)));
-      } catch {
-        /* partial line — skip */
-      }
-    }
-  }
-  return events;
-}
-
-function terminalEvent(events, what) {
-  const done = events.find((e) => e.done);
-  if (!done) throw new Error(`${what} ended without a terminal event`);
-  if (done.error) throw new Error(`${what} failed: ${done.error}`);
-  return done;
-}
-
-const PIPELINE_TIMEOUT_MS = 20 * 60_000; // team/bench pipelines take minutes
-
 function humanSize(bytes) {
   if (typeof bytes !== "number") return "unknown size";
   return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
@@ -84,69 +57,81 @@ const NO_INPUT = {
   additionalProperties: false,
 };
 
-function idInput(what) {
-  return {
-    type: "object",
-    properties: {
-      id: { type: "string", description: `The ${what} id` },
-      node: NODE_PROP,
-    },
-    required: ["id"],
-    additionalProperties: false,
-  };
-}
+const GATED_ONLY = {
+  type: "object",
+  properties: { node: NODE_PROP, confirm: CONFIRM },
+  additionalProperties: false,
+};
 
-function requireId(args) {
-  if (typeof args.id !== "string" || args.id.trim() === "") {
-    throw new Error("Missing required argument: id (non-empty string)");
+// Resolve a model the user names by alias (koinos-fast) or by package id
+// (qwen2.5-1.5b-instruct-q4_k_m@1, custom:<sha256>) to the package id Core's
+// removal routes take. Aliases are friendlier; package ids are exact.
+async function resolvePackage(client, args) {
+  const pkg = typeof args.package === "string" ? args.package.trim() : "";
+  if (pkg) return { packageId: pkg, alias: null };
+  const alias = typeof args.alias === "string" ? args.alias.trim() : "";
+  if (!alias) throw new Error("Pass alias (e.g. koinos-fast) or package (e.g. qwen2.5-1.5b-instruct-q4_k_m@1)");
+  const catalog = await client.get("/core/models");
+  const entry = catalog?.aliases?.find?.((a) => a.alias === alias);
+  if (!entry) {
+    const known = catalog?.aliases?.map?.((a) => a.alias) ?? [];
+    throw new Error(`Unknown alias "${alias}". Known aliases: ${known.join(", ")}`);
   }
-  return encodeURIComponent(args.id.trim());
+  if (typeof entry.package !== "string" || !entry.package) {
+    throw new Error(`Alias "${alias}" has no package id; pass package explicitly`);
+  }
+  return { packageId: entry.package, alias };
 }
 
 export const tools = [
   {
     name: "health",
     description:
-      "Check the Koinos AI node's health and status (read-only). " +
-      "Reports app version, detected hardware (CPU/GPU/RAM/disk, runtime " +
-      "capabilities), and module state: gateway, runtime (active model, " +
-      "loading), and model storage. modules.models.bytes grows during a " +
-      "model download, so this also serves as download progress.",
+      "Check the KAI Core node's health (read-only): Core engine version, " +
+      "product name, detected hardware (CPU/GPU/RAM/disk, runtime " +
+      "capabilities), and module state — gateway, runtime (active model, " +
+      "loading stage, inference queue) and model storage. The version is " +
+      "Core's engine package, which moves slower than the desktop app's " +
+      "release number (engine 0.7.2 ships in app 0.7.17). modules.models.bytes " +
+      "grows during a model download, so this also serves as download progress.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/health"),
   },
   {
     name: "models_list",
     description:
-      "List models on the Koinos AI node (read-only): the alias catalog " +
-      "(koinos-fast/-balanced/-smart) with package pins, sizes, licenses, and " +
-      "per-alias status (ready / partial / absent). Does not download anything.",
+      "List models on the KAI Core node (read-only): the alias catalog with " +
+      "package pins, licenses, minimum RAM, vision support and per-alias " +
+      "status (ready / partial / absent); sizes as sizeBytes (weights), " +
+      "downloadSizeBytes (weights + vision projector) and diskBytes (on disk " +
+      "now, incl. partial downloads; 0 = nothing, null = unknown). Also the " +
+      "runtime state, the model-preparation queue, download and import " +
+      "progress. Does not download anything.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/models"),
   },
   {
     name: "earn_status",
     description:
-      "Get the node's earning status (read-only): whether the earn worker is " +
-      "running, jobs completed, receipts accepted, scheduler URL, earnings, " +
-      "and wallet summary (exists/unlocked/address only — never key material). " +
-      "worker.backoff true means earning paused ITSELF because the machine " +
-      "is busy (courtesy pause, app v0.49+; auto-resumes) — paused on " +
-      "purpose, not broken. worker.modelGate explains per model whether it " +
-      "is advertised to the network and why not. producerReport (app v0.54+) " +
-      "is the blockchain node's own report to the koinosai.com dashboard, " +
-      "independent of earning; producerReport.lastSkip says why the node is " +
-      "NOT on the dashboard (local-only privacy, no scheduler URL, earning " +
-      "worker already reporting, wallet locked) — all normal quiet states.",
+      "Get the node's earning status (read-only): earn worker state, jobs " +
+      "and receipts, scheduler URL, the legacy Testnet KAI balance " +
+      "(earnings.kai — a decimal string, never parse it as a float), and the " +
+      "wallet summary (exists/unlocked/address only — never key material). " +
+      "koin is the mainnet KOIN earning view (Core Beta): mode 'shadow' with " +
+      "paymentsEnabled false means KOIN payouts are being rehearsed, not paid; " +
+      "policy carries the reward split in basis points. producerReport reads " +
+      "'plugin-managed' on Core: block-producer reporting moved into the " +
+      "separate Koinos Node plugin. Joining the network ('Share AI capacity') " +
+      "is done in the KAI window, not through this API.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/earn"),
   },
   {
     name: "network_status",
     description:
-      "Get the node's network and privacy posture (read-only): current " +
-      "privacy mode (e.g. local-only / local-first / network), scheduler URL, " +
-      "and wallet lock state. Changes nothing.",
+      "Get the node's network and privacy posture (read-only): privacy mode " +
+      "(local-only / local-first / network), scheduler URL, whether the " +
+      "wallet is unlocked, and koinRehearsal. Changes nothing.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/network"),
   },
@@ -164,145 +149,55 @@ export const tools = [
     name: "network_overview",
     description:
       "Live view of the Koinos compute network as seen from this node " +
-      "(read-only): scheduler reachability, workers online with the models " +
-      "each serves, recent performance (jobs, tok/s, compute rating), queue " +
-      "depth and pending jobs. Worker addresses arrive pre-truncated by the " +
-      "scheduler, so nothing identifying is exposed.",
+      "(read-only): scheduler reachability, workers online and how many are " +
+      "unsigned, whether worker proofs are enforced, each worker's models, " +
+      "performance (jobs, tok/s, compute rating, success rate, challenge " +
+      "results) and reputation. Worker addresses arrive pre-truncated by the " +
+      "scheduler. Fail-soft: unreachable → reachable:false, empty lists.",
     inputSchema: NO_INPUT,
     handler: (client) => client.get("/core/network/status"),
   },
   {
-    name: "tasks_list",
+    name: "account_status",
     description:
-      "List scheduled tasks configured on the Koinos AI node (read-only).",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/tasks"),
-  },
-  {
-    name: "chats_list",
-    description:
-      "List chat conversations stored on the Koinos AI node (read-only): id, " +
-      "title, timestamps, message count. Transcript text is omitted to keep " +
-      "output small — use chat_get for a full conversation.",
-    inputSchema: NO_INPUT,
-    handler: async (client) => {
-      const data = await client.get("/core/chats");
-      if (Array.isArray(data?.chats)) {
-        return {
-          ...data,
-          chats: data.chats.map(({ searchText, ...rest }) => rest),
-        };
-      }
-      return data;
+      "Get the node's KAI account sign-in state (read-only). scope 'credits' " +
+      "(default) is the wallet-credits account at credits.koinosai.com that " +
+      "network credits live in; 'website' is the koinosai.com website " +
+      "account. Returns signed-in state, account id, linked wallet " +
+      "addresses, whether this machine's wallet is linked, and how the " +
+      "session is stored — never the session token. Refused in Local-Only " +
+      "privacy mode (account access needs the network); the node says so.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: {
+          type: "string",
+          enum: ["credits", "website"],
+          description: "Which account: credits (default) or website",
+        },
+        node: NODE_PROP,
+      },
+      additionalProperties: false,
     },
+    handler: (client, args) =>
+      client.get(args.scope === "website" ? "/core/website-account" : "/core/account"),
   },
-  {
-    name: "chat_get",
-    description:
-      "Fetch one chat conversation from the Koinos AI node by id (read-only), " +
-      "including the full message transcript.",
-    inputSchema: idInput("chat"),
-    handler: (client, args) => client.get(`/core/chats/${requireId(args)}`),
-  },
-  {
-    name: "docs_list",
-    description:
-      "List documents stored on the Koinos AI node (read-only).",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/docs"),
-  },
-  {
-    name: "doc_get",
-    description:
-      "Fetch one document from the Koinos AI node by id (read-only).",
-    inputSchema: idInput("document"),
-    handler: (client, args) => client.get(`/core/docs/${requireId(args)}`),
-  },
-  {
-    name: "keys_list",
-    description:
-      "List API keys registered on the Koinos AI node (read-only). Returns " +
-      "key metadata, per-key monthly usage (requests, tokens, network cost) " +
-      "and budget cap, and whether auth is required for /v1/* — keys are " +
-      "hashed at rest upstream; no secret material is available or returned.",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/keys"),
-  },
-  {
-    name: "remote_access_status",
-    description:
-      "Get the Local API's remote-access state (read-only, app v0.50+): " +
-      "whether the node's OpenAI-compatible /v1 API is published at a stable " +
-      "public address through the koinosai.com relay — enabled, connection " +
-      "state, public base URL, and tunnel id. Only /v1 ever crosses the " +
-      "relay; this control plane stays localhost-only. Changes nothing.",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/remote"),
-  },
-  {
-    name: "mcp_servers_list",
-    description:
-      "List the MCP servers registered in the Koinos AI app (read-only, app " +
-      "v0.48+): per server the id, name, transport, launch command, trust " +
-      "flags, connection state, and tool names (schemas omitted to keep " +
-      "output small), plus the app's one-click install catalog and whether a " +
-      "Node.js runtime is available to run stdio servers. Registration is " +
-      "deliberately not writable through this MCP server — registering a " +
-      "server executes an arbitrary command.",
-    inputSchema: NO_INPUT,
-    handler: async (client) => {
-      const data = await client.get("/core/mcp");
-      if (Array.isArray(data?.servers)) {
-        return {
-          ...data,
-          servers: data.servers.map(({ tools: serverTools, ...rest }) => ({
-            ...rest,
-            toolCount: Array.isArray(serverTools) ? serverTools.length : null,
-            toolNames: Array.isArray(serverTools)
-              ? serverTools.map((t) => t?.name).filter(Boolean)
-              : undefined,
-          })),
-        };
-      }
-      return data;
-    },
-  },
-  {
-    name: "memory_list",
-    description:
-      "List the memories the Koinos AI app has stored for its agents/chats " +
-      "(read-only, app v0.48+). Changes nothing.",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/memory"),
-  },
-  {
-    name: "voice_status",
-    description:
-      "Get the Koinos AI app's voice-mode state (read-only, app v0.48+): " +
-      "whether voice is available, whether the engine and model are " +
-      "installed, and the download size if not. Does not install anything.",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/voice"),
-  },
-
   {
     name: "nodes_status",
     description:
-      "Aggregate status across every configured Koinos AI node (read-only): " +
-      "reachability, app version, active model, earning state, and privacy " +
-      "mode per node, fetched concurrently. Also checks the latest Koinos AI " +
-      "release on GitHub (cached, fail-soft; the server's only outbound call " +
-      "— disable with KOINOS_AI_NO_VERSION_CHECK=1) and flags nodes running " +
-      "an older version. The returned names are what the `node` argument on " +
-      "other tools accepts. Use this first when more than one machine is " +
-      "configured.",
+      "Aggregate status across every configured KAI Core node (read-only): " +
+      "reachability, Core version, active model, earning state, wallet " +
+      "lock state and privacy mode per node, fetched concurrently. The " +
+      "returned names are what the `node` argument on other tools accepts. " +
+      "Use this first when more than one machine is configured. (No update " +
+      "check: Core updates itself in-app, and its HTTP surface reports the " +
+      "engine version, not the app release, so a comparison would be wrong.)",
     inputSchema: {
       type: "object",
       properties: {},
       additionalProperties: false,
     },
     handler: async (_client, _args, pool) => {
-      const latestPromise = latestAppRelease();
       const nodes = await Promise.all(
         pool.all().map(async ({ node, client }) => {
           const out = {
@@ -315,6 +210,7 @@ export const tools = [
             const h = await client.get("/core/health");
             out.reachable = true;
             out.version = h?.version ?? null;
+            out.product = h?.productName ?? null;
             out.activeModel = h?.modules?.runtime?.activeAlias ?? null;
             out.modelLoading = h?.modules?.runtime?.loading ?? null;
           } catch (err) {
@@ -332,7 +228,7 @@ export const tools = [
               unlocked: earn?.wallet?.unlocked ?? null,
             };
           } catch {
-            // Older node without the earn surface — leave the fields off.
+            // A node without the earn surface — leave the fields off.
           }
           try {
             out.privacyMode = (await client.get("/core/network"))?.privacyMode ?? null;
@@ -342,83 +238,34 @@ export const tools = [
           return out;
         }),
       );
-      const latest = await latestPromise;
-      if (latest) {
-        for (const n of nodes) {
-          if (typeof n.version === "string" && n.version !== "") {
-            n.updateAvailable = compareVersions(latest.version, n.version) > 0;
-          }
-        }
-      }
-      return {
-        defaultNode: pool.defaultName,
-        ...(latest ? { latestRelease: latest } : {}),
-        nodes,
-      };
+      return { defaultNode: pool.defaultName, nodes };
     },
   },
 
-  // ----- M3: mutating tools. All gated on confirm: true. -----
-  {
-    name: "earn_start",
-    description:
-      "MUTATING — starts selling this machine's idle compute to the Koinos " +
-      "AI network for KAI. Sustained CPU/GPU load, power draw, and network " +
-      "traffic will follow, and the node begins accepting scheduler jobs. " +
-      "Requires an existing, unlocked wallet. Do not call this casually: " +
-      "state the intent to the user and pass confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: { node: NODE_PROP, confirm: CONFIRM },
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(args, "Start earning: the node begins taking network compute jobs.") ??
-      client.post("/core/earn/start", {}),
-  },
+  // ----- Mutating tools. All gated on confirm: true. -----
   {
     name: "earn_stop",
     description:
-      "MUTATING — stops taking network jobs; the machine stops earning KAI " +
-      "until earning is started again. Requires confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: { node: NODE_PROP, confirm: CONFIRM },
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(args, "Stop earning: the node stops accepting network compute jobs.") ??
-      client.post("/core/earn/stop", {}),
-  },
-  {
-    name: "earn_nudge",
-    description:
-      "MUTATING — makes the node re-register with the network scheduler " +
-      "immediately instead of waiting for its next heartbeat. The fix when " +
-      "earning is on but the node has dropped out of the network view " +
-      "(typically after OS sleep/standby — check with network_overview). " +
-      "Does not start or stop earning. Requires confirm: true.",
+      "MUTATING — stops this machine's earn worker: it stops taking network " +
+      "compute jobs and auto-start is switched off. (Starting is not " +
+      "available over the API on Core — the user joins the network with " +
+      "'Share AI capacity' in the KAI window.) Requires confirm: true.",
     annotations: { readOnlyHint: false, idempotentHint: true },
-    inputSchema: {
-      type: "object",
-      properties: { node: NODE_PROP, confirm: CONFIRM },
-      additionalProperties: false,
-    },
+    inputSchema: GATED_ONLY,
     handler: (client, args) =>
-      confirmGate(args, "Re-register this node with the network scheduler now.") ??
-      client.post("/core/earn/nudge", {}),
+      confirmGate(args, "Stop earning: the node stops accepting network compute jobs and won't auto-start.") ??
+      client.post("/core/earn/stop", {}),
   },
   {
     name: "network_set_privacy_mode",
     description:
-      "MUTATING — changes the node's privacy posture. Current upstream " +
-      "values: 'local-only' (nothing leaves this machine), 'local-first' " +
-      "(remote fallback allowed), 'network' (remote execution allowed). Any " +
+      "MUTATING — changes the node's privacy posture: 'local-only' (nothing " +
+      "leaves this machine — Core's default), 'local-first' (local models " +
+      "first, network fallback), 'network' (network execution allowed). Any " +
       "mode other than local-only can send prompts off this machine, and " +
-      "remote hosts can read plaintext. The node validates the value. " +
-      "Requires confirm: true.",
+      "remote hosts can read plaintext. Switching to local-only aborts " +
+      "in-flight network requests. The node validates the value. Requires " +
+      "confirm: true.",
     annotations: { readOnlyHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
@@ -437,27 +284,37 @@ export const tools = [
   {
     name: "model_download_cancel",
     description:
-      "MUTATING — aborts an in-flight model/engine download (app v0.29.2+), " +
-      "freeing the load slot without a node restart. Honest when nothing is " +
-      "cancellable: a load step that is not a download reports cancelled: " +
-      "false with a note. Requires confirm: true.",
+      "MUTATING — cancels a queued or in-flight model preparation (download " +
+      "or engine setup), by alias or the current one if no alias is given. " +
+      "Honest when nothing is cancellable: a step that cannot be cancelled " +
+      "reports cancelled: false with a note. Requires confirm: true.",
     annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
-      properties: { node: NODE_PROP, confirm: CONFIRM },
+      properties: {
+        alias: { type: "string", description: "Model alias to cancel (optional; default: the current one)" },
+        node: NODE_PROP,
+        confirm: CONFIRM,
+      },
       additionalProperties: false,
     },
-    handler: (client, args) =>
-      confirmGate(args, "Abort the in-flight model/engine download on the node.") ??
-      client.post("/core/models/download/cancel", {}),
+    handler: (client, args) => {
+      const alias = typeof args.alias === "string" && args.alias.trim() ? args.alias.trim() : null;
+      return (
+        confirmGate(args, `Cancel preparing ${alias ?? "the current model"} on the node.`) ??
+        client.post("/core/models/download/cancel", alias ? { alias } : {})
+      );
+    },
   },
   {
     name: "model_ensure",
     description:
-      "MUTATING — downloads and loads a model by alias (e.g. koinos-balanced) " +
-      "in the background. Downloads run to multiple GB. Called without " +
-      "confirm, it reports the alias's download size and status instead of " +
-      "starting anything. Progress is visible via models_list and health.",
+      "MUTATING — queues a model for download and load by alias (e.g. " +
+      "koinos-balanced); Core prepares the engine first if needed. Downloads " +
+      "run to multiple GB. Called without confirm, it reports the alias's " +
+      "download size, what is already on disk, minimum RAM and license " +
+      "instead of starting anything. Progress shows in models_list " +
+      "(modelQueue, download) and health.",
     annotations: { readOnlyHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
@@ -479,15 +336,21 @@ export const tools = [
           const known = catalog?.aliases?.map?.((a) => a.alias) ?? [];
           throw new Error(`Unknown alias "${alias}". Known aliases: ${known.join(", ")}`);
         }
+        const download = entry.downloadSizeBytes ?? entry.sizeBytes;
         return {
           executed: false,
           requiresConfirmation: true,
           alias,
           status: entry.status,
-          sizeBytes: entry.sizeBytes,
-          size: humanSize(entry.sizeBytes),
+          downloadSizeBytes: download,
+          size: humanSize(download),
+          onDisk: humanSize(entry.diskBytes),
+          minRamGb: entry.minRamGb ?? null,
           license: entry.license,
-          wouldDo: `Download+load ${alias} (${humanSize(entry.sizeBytes)}, ${entry.license}).`,
+          wouldDo:
+            entry.status === "ready"
+              ? `Load ${alias} (already downloaded — no download needed).`
+              : `Download+load ${alias} (${humanSize(download)}, ${entry.license}).`,
           hint:
             "Nothing was downloaded. Tell the user the size and, once they " +
             "agree, call again with confirm: true.",
@@ -504,9 +367,9 @@ export const tools = [
       "— minutes for multi-GB files — and then serves it under a new " +
       "custom-<name> alias. The file is referenced in place, never copied: " +
       "moving it later breaks the model. A response with done: false means " +
-      "hashing is still running — poll models_list (importing.pct, " +
-      "importError); done: true carries the new entry. One import runs at a " +
-      "time; never re-submit while one is in flight. Requires confirm: true.",
+      "hashing is still running — poll models_list (importing, importError); " +
+      "done: true carries the new entry. One import runs at a time; never " +
+      "re-submit while one is in flight. Requires confirm: true.",
     annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
@@ -544,8 +407,8 @@ export const tools = [
     description:
       "MUTATING — deregisters an imported custom model by its custom-<name> " +
       "alias. The GGUF file itself is never deleted (it belongs to the " +
-      "user), and re-importing it restores the model. Built-in catalog " +
-      "aliases cannot be removed this way. Requires confirm: true.",
+      "user), and re-importing it restores the model. For downloaded catalog " +
+      "models use model_uninstall. Requires confirm: true.",
     annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
@@ -572,682 +435,65 @@ export const tools = [
     },
   },
   {
-    name: "task_create",
+    name: "model_uninstall",
     description:
-      "MUTATING — creates a scheduled task on the node: a saved prompt that " +
-      "runs against a local model on a schedule and drops its answer into " +
-      "chat history. Tasks only fire while the Koinos AI app is running, and " +
-      "runs go through the same privacy routing as typed chats. Requires " +
-      "confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Task name (max 60 chars)" },
-        prompt: { type: "string", description: "The prompt to run (max 4000 chars)" },
-        model: { type: "string", description: "Model alias, e.g. koinos-fast" },
-        schedule: {
-          type: "object",
-          properties: {
-            kind: { type: "string", enum: ["hourly", "every6h", "daily", "weekly"] },
-            hour: { type: "integer", description: "0-23, for daily/weekly (default 9)" },
-            day: { type: "integer", description: "0=Sun … 6=Sat, for weekly (default 1)" },
-          },
-          required: ["kind"],
-          additionalProperties: false,
-        },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["name", "prompt", "model", "schedule"],
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(
-        args,
-        `Create task "${args.name}" running ${args.schedule?.kind} on ${args.model}.`,
-      ) ??
-      client.post("/core/tasks", {
-        name: args.name,
-        prompt: args.prompt,
-        model: args.model,
-        schedule: args.schedule,
-      }),
-  },
-  {
-    name: "task_run_now",
-    description:
-      "MUTATING — runs a scheduled task immediately (local inference on this " +
-      "machine; the result lands in chat history) and returns the " +
-      "assistant's answer when it can be read back. Never retry a run that " +
-      "timed out — the node queues it and a retry produces duplicate runs. " +
-      "Requires confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "The task id" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    handler: async (client, args) => {
-      const preview = confirmGate(args, `Run task ${args.id} now.`);
-      if (preview) return preview;
-      const result = await client.post(`/core/tasks/${requireId(args)}/run`, {}, {
-        // A run is synchronous inference and may first swap the loaded model;
-        // the node drops the run if the client disconnects first (observed
-        // live 2026-08-16 at the 10s default). Floor, not replacement — a
-        // larger configured timeout still wins.
-        timeoutMs: Math.max(client.timeoutMs, RUN_TIMEOUT_MS),
-      });
-      // The run is awaited upstream, so lastChatId already points at the
-      // result chat. Read the answer back, fail-soft: the chat index can lag
-      // (see API doc quirks) and the run itself has already succeeded.
-      const chatId = result?.task?.lastChatId;
-      if (typeof chatId !== "string" || chatId === "") return result;
-      try {
-        const data = await client.get(`/core/chats/${encodeURIComponent(chatId)}`);
-        const messages = data?.chat?.messages;
-        const reply = Array.isArray(messages)
-          ? messages.findLast((m) => m?.role === "assistant")?.content
-          : undefined;
-        if (typeof reply === "string") return { ...result, answer: reply };
-      } catch {
-        // Fall through to the hint below.
-      }
-      return {
-        ...result,
-        answer: null,
-        answerHint:
-          `The run finished but chat ${chatId} could not be read back yet ` +
-          "(the node's chat index can lag). Try chat_get with that id. Do " +
-          "not run the task again — that would duplicate the run.",
-      };
-    },
-  },
-  {
-    name: "task_delete",
-    description:
-      "MUTATING and DESTRUCTIVE — permanently deletes a scheduled task from " +
-      "the node. There is no undo. Requires confirm: true.",
+      "MUTATING and DESTRUCTIVE — deletes a downloaded model's files from the " +
+      "node to free disk (vision projectors shared with another installed " +
+      "model are kept). Name it by alias or package id. Called without " +
+      "confirm, it returns Core's own removal plan — exactly which files go, " +
+      "how much disk is freed, whether it can be re-downloaded, and whether " +
+      "it is loaded right now (a loaded model must be switched away from " +
+      "first). Imported custom models only lose their registration; their " +
+      "file is kept. Requires confirm: true.",
     annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "The task id" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(args, `Permanently delete task ${args.id}.`) ??
-      client.delete(`/core/tasks/${requireId(args)}`),
-  },
-  {
-    name: "task_set_enabled",
-    description:
-      "MUTATING — pauses or resumes a scheduled task on the node without " +
-      "deleting it. Re-enabling starts the schedule clock fresh (no burst of " +
-      "missed runs). Requires confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "The task id" },
-        enabled: { type: "boolean", description: "true to resume, false to pause" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["id", "enabled"],
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(args, `${args.enabled ? "Resume" : "Pause"} task ${args.id}.`) ??
-      client.patch(`/core/tasks/${requireId(args)}`, { enabled: args.enabled }),
-  },
-  {
-    name: "chat_rename",
-    description:
-      "MUTATING — renames a chat conversation on the node (max 80 chars; the " +
-      "new title sticks and outlives autosaves). Requires confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "The chat id" },
-        title: { type: "string", description: "New title (max 80 chars)" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["id", "title"],
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(args, `Rename chat ${args.id} to "${args.title}".`) ??
-      client.patch(`/core/chats/${requireId(args)}`, { title: args.title }),
-  },
-  {
-    name: "chat_delete",
-    description:
-      "MUTATING and DESTRUCTIVE — permanently deletes a chat conversation and " +
-      "its transcript from the node. There is no undo. Requires confirm: true.",
-    annotations: { readOnlyHint: false, destructiveHint: true },
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "The chat id" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(args, `Permanently delete chat ${args.id} and its transcript.`) ??
-      client.delete(`/core/chats/${requireId(args)}`),
-  },
-  {
-    name: "key_create",
-    description:
-      "MUTATING — creates a named API key for the node's OpenAI-compatible " +
-      "/v1/* gateway. The response contains the key secret exactly once " +
-      "(only a hash is stored upstream; it can never be retrieved again) — " +
-      "relay it to the user immediately and never store or log it. Creating " +
-      "the node's FIRST key switches /v1/* from open localhost access to " +
-      "required bearer auth: keyless clients start getting 401s. Requires " +
-      "confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "A label for the key, e.g. 'vscode'" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["name"],
-      additionalProperties: false,
-    },
-    handler: async (client, args) => {
-      const name = String(args.name ?? "").trim();
-      if (!name) throw new Error("Missing required argument: name (non-empty string)");
-      if (args.confirm !== true) {
-        let firstKey = false;
-        try {
-          const current = await client.get("/core/keys");
-          firstKey = Array.isArray(current?.keys) && current.keys.length === 0;
-        } catch {
-          // Node unreadable right now — the preview just stays generic.
-        }
-        return confirmGate(
-          args,
-          `Create API key "${name}". The response will contain the key ` +
-            "secret exactly once — relay it to the user, never store it." +
-            (firstKey
-              ? " This is the node's FIRST key: /v1/* switches from open " +
-                "localhost access to required bearer auth, and keyless " +
-                "clients start getting 401s."
-              : ""),
-        );
-      }
-      return client.post("/core/keys", { name });
-    },
-  },
-  {
-    name: "key_revoke",
-    description:
-      "MUTATING and DESTRUCTIVE — permanently revokes an API key by id. " +
-      "Clients using it start getting 401s immediately; there is no undo. " +
-      "Revoking the LAST key returns /v1/* to open, unauthenticated " +
-      "localhost access. Requires confirm: true.",
-    annotations: { readOnlyHint: false, destructiveHint: true },
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "The key id (from keys_list)" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(
-        args,
-        `Permanently revoke API key ${args.id}. Clients using it get 401s ` +
-          "immediately; revoking the last key reopens /v1/* unauthenticated.",
-      ) ?? client.delete(`/core/keys/${requireId(args)}`),
-  },
-  {
-    name: "key_set_budget",
-    description:
-      "MUTATING — sets or clears an API key's monthly USD spending cap for " +
-      "paid Koinos-network inference (upstream spec §34 spending limits). " +
-      "Local inference is free and never gated by this. A key at its cap " +
-      "gets 429s on network requests until the cap is raised or the month " +
-      "rolls over. Pass budgetUsdMonthly: null to remove the cap. Requires " +
-      "confirm: true.",
-    annotations: { readOnlyHint: false, idempotentHint: true },
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "The key id (from keys_list)" },
-        budgetUsdMonthly: {
-          type: ["number", "null"],
-          description: "Monthly cap in USD (≥ 0), or null to remove the cap",
-        },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["id", "budgetUsdMonthly"],
-      additionalProperties: false,
-    },
-    handler: (client, args) => {
-      const budget = args.budgetUsdMonthly ?? null;
-      if (budget !== null && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0)) {
-        throw new Error(
-          "budgetUsdMonthly must be a non-negative number of USD, or null to clear the cap",
-        );
-      }
-      return (
-        confirmGate(
-          args,
-          budget === null
-            ? `Remove the monthly network-spend cap on API key ${args.id}.`
-            : `Cap API key ${args.id} at $${budget}/month of network spend ` +
-              "(local inference stays free and ungated).",
-        ) ?? client.post(`/core/keys/${requireId(args)}/budget`, { budgetUsdMonthly: budget })
-      );
-    },
-  },
-  {
-    name: "remote_access_set",
-    description:
-      "MUTATING, and OUTWARD-FACING when enabling — publishes the node's " +
-      "OpenAI-compatible /v1 API at a stable public address, tunnelled " +
-      "through the koinosai.com relay (traffic transits their " +
-      "infrastructure). The node refuses to enable it until an API key " +
-      "exists, so the public address never serves unauthenticated callers; " +
-      "only /v1 crosses — the control plane and files stay on this machine. " +
-      "Disabling kills the public address immediately. Requires confirm: true.",
-    annotations: { readOnlyHint: false, idempotentHint: true },
-    inputSchema: {
-      type: "object",
-      properties: {
-        enabled: { type: "boolean", description: "true = publish, false = go dark" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["enabled"],
-      additionalProperties: false,
-    },
-    handler: (client, args) => {
-      if (typeof args.enabled !== "boolean") throw new Error("enabled must be true or false");
-      return (
-        confirmGate(
-          args,
-          args.enabled
-            ? "Publish this node's /v1 API at its stable public address via " +
-              "the koinosai.com relay. Callers still need an API key; only " +
-              "/v1 crosses — the control plane stays local. The node refuses " +
-              "if no API key exists yet."
-            : "Turn remote access OFF — the public address goes dead immediately.",
-        ) ?? client.post("/core/remote", { enabled: args.enabled })
-      );
-    },
-  },
-
-  // ----- M8: the embedded Koinos blockchain node (/core/koinos/rpc, v0.28+).
-  // The value-moving channels (the chain send, every fund send, and the
-  // bridge and swap flows) are deliberately not wrapped — same red line as
-  // the wallet endpoints: money-movers stay out of agent reach at any
-  // confirmation level, password-gated upstream or not. A test greps this
-  // file for those channel names to keep it that way.
-  {
-    name: "node_status",
-    description:
-      "Status of the embedded Koinos blockchain node (read-only): Docker " +
-      "availability, compose services, running state, producer key, data " +
-      "directory. Requires privacy mode local-first or network — in " +
-      "local-only the whole node surface is disabled and says so.",
-    inputSchema: NO_INPUT,
-    handler: (client) => nodeRpc(client, "node:status"),
-  },
-  {
-    name: "node_setup_status",
-    description:
-      "Readiness of the blockchain node's guided setup (read-only): WSL 2 " +
-      "state, Docker installed/running, and the remaining setup steps.",
-    inputSchema: NO_INPUT,
-    handler: (client) => nodeRpc(client, "setup:status"),
-  },
-  {
-    name: "node_dashboard",
-    description:
-      "The blockchain node dashboard (read-only): network, wallet " +
-      "existence/lock/address, node run state, sync, and earnings summary.",
-    inputSchema: NO_INPUT,
-    handler: (client) => nodeRpc(client, "dashboard:summary"),
-  },
-  {
-    name: "node_balances",
-    description:
-      "On-chain balances for this machine's wallet address (read-only): " +
-      "KOIN, VHP, and mana, read from public mainnet RPC. No local node " +
-      "required.",
-    inputSchema: NO_INPUT,
-    handler: (client) => nodeRpc(client, "chain:balances"),
-  },
-  {
-    name: "node_rewards_status",
-    description:
-      "Auto-reburn status (read-only): configuration (percent, mode), " +
-      "whether it is running, next run time, and the last result. Reburn " +
-      "converts block rewards back to VHP at this wallet's own address.",
-    inputSchema: NO_INPUT,
-    handler: (client) => nodeRpc(client, "rewards:status"),
-  },
-  {
-    name: "node_producer_status",
-    description:
-      "Block-producer registration status (read-only): the wallet address, " +
-      "the local producer key, the registered key on chain, and whether " +
-      "they match.",
-    inputSchema: NO_INPUT,
-    handler: (client) => nodeRpc(client, "producer:status"),
-  },
-  {
-    name: "node_logs",
-    description:
-      "Recent log output from the running blockchain node's services " +
-      "(read-only). Errors plainly when Docker or the node is not running.",
-    inputSchema: NO_INPUT,
-    handler: (client) => nodeRpc(client, "node:logs"),
-  },
-  {
-    name: "node_start",
-    description:
-      "MUTATING — starts the Koinos blockchain node on this machine, and if " +
-      "Docker Desktop is missing this DOWNLOADS AND INSTALLS IT first " +
-      "(app v0.28.3+ one-click cascade; ~500 MB, launches an installer). " +
-      "Once Docker exists: compose up, multiple services, sustained disk and " +
-      "network use while syncing. State both consequences to the user before " +
-      "passing confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: { node: NODE_PROP, confirm: CONFIRM },
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(
-        args,
-        "Start the Koinos blockchain node — and if Docker Desktop is not " +
-          "installed, DOWNLOAD AND INSTALL it first (the app's one-click " +
-          "cascade; ~500 MB plus an installer run).",
-      ) ?? nodeRpc(client, "node:start"),
-  },
-  {
-    name: "node_stop",
-    description:
-      "MUTATING — stops the Koinos blockchain node's Docker services. A " +
-      "registered producer stops producing blocks until started again. " +
-      "Requires confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: { node: NODE_PROP, confirm: CONFIRM },
-      additionalProperties: false,
-    },
-    handler: (client, args) =>
-      confirmGate(args, "Stop the Koinos blockchain node's services.") ??
-      nodeRpc(client, "node:stop"),
-  },
-  {
-    name: "node_quick_sync",
-    description:
-      "MUTATING — downloads a chain snapshot to fast-forward node sync. " +
-      "This is a very large download (observed: ~63 GB archive needing " +
-      "~165 GB free disk). Called without confirm, it reports the current " +
-      "archive size, required disk, and free disk instead of starting.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: { node: NODE_PROP, confirm: CONFIRM },
-      additionalProperties: false,
-    },
-    handler: async (client, args) => {
-      if (args.confirm !== true) {
-        const info = await nodeRpc(client, "node:quickSyncInfo");
-        const d = info?.data ?? {};
-        return {
-          executed: false,
-          requiresConfirmation: true,
-          archive: humanSize(d.archiveBytes),
-          requiredDisk: humanSize(d.requiredBytes),
-          freeDisk: humanSize(d.freeBytes),
-          wouldDo: `Download a ${humanSize(d.archiveBytes)} chain snapshot (needs ${humanSize(d.requiredBytes)} free; this machine has ${humanSize(d.freeBytes)}).`,
-          hint:
-            "Nothing was downloaded. Tell the user the sizes and, once they " +
-            "agree, call again with confirm: true.",
-        };
-      }
-      return nodeRpc(client, "node:quickSync");
-    },
-  },
-  {
-    name: "chain_burn",
-    description:
-      "MUTATING and IRREVERSIBLE — burns KOIN into VHP at this wallet's own " +
-      "address (the proof-of-burn stake that lets a node produce blocks). " +
-      "Nothing leaves the wallet, but KOIN converts one-way into VHP that " +
-      "only unwinds through block production. Called without confirm, it " +
-      "reports the maximum burnable amount and mana limit instead of " +
-      "burning. amount is a human-format KOIN string, e.g. \"5\" or \"12.5\".",
-    annotations: { readOnlyHint: false, destructiveHint: true },
-    inputSchema: {
-      type: "object",
-      properties: {
-        amount: {
+        alias: { type: "string", description: "Model alias, e.g. qwen-coder-7b (see models_list)" },
+        package: {
           type: "string",
-          description: "KOIN amount to burn, human format (e.g. \"5\")",
+          description: "Exact package id instead of an alias, e.g. qwen2.5-1.5b-instruct-q4_k_m@1 or custom:<sha256>",
         },
         node: NODE_PROP,
         confirm: CONFIRM,
       },
-      required: ["amount"],
       additionalProperties: false,
     },
     handler: async (client, args) => {
-      const amount = String(args.amount ?? "").trim();
-      if (!amount) throw new Error("Missing required argument: amount");
+      const { packageId, alias } = await resolvePackage(client, args);
+      const path = `/core/models/installed/${encodeURIComponent(packageId)}`;
       if (args.confirm !== true) {
-        const max = await nodeRpc(client, "chain:maxBurn");
-        const d = max?.data ?? {};
+        const plan = await client.get(path);
+        const name = alias ? `${alias} (${packageId})` : packageId;
         return {
           executed: false,
           requiresConfirmation: true,
-          requestedAmount: amount,
-          maxBurnable: d.maxFormatted ?? null,
-          manaLimited: d.manaLimited ?? null,
-          wouldDo: `Irreversibly burn ${amount} KOIN into VHP at this wallet's own address (max currently burnable: ${d.maxFormatted ?? "unknown"} KOIN).`,
+          packageId,
+          plan,
+          frees: humanSize(plan?.freesBytes),
+          wouldDo: plan?.inUse
+            ? `${name} is loaded right now — Core will refuse until another model is loaded.`
+            : plan?.kind === "imported"
+              ? `Forget imported model ${name}; its file stays at ${plan.keepsFile}.`
+              : `Delete ${name}: ${plan?.deletesFiles?.length ?? 0} file(s), freeing ${humanSize(plan?.freesBytes)}` +
+                (plan?.redownloadable ? " (it can be downloaded again later)." : "."),
           hint:
-            "Nothing was burned. Tell the user the amount and the maximum, " +
-            "and only after they agree call again with confirm: true.",
+            "Nothing was deleted. Tell the user what will be removed and, once " +
+            "they agree, call again with confirm: true.",
         };
       }
-      return nodeRpc(client, "chain:burn", { amount });
-    },
-  },
-
-  // ----- M10: AI Teams + benchmark + the developer-tools switch (v0.28.8+).
-  {
-    name: "teams_list",
-    description:
-      "List the AI Team templates available on the node (read-only): id, " +
-      "label, what each role pipeline does, the tools it may use, and its " +
-      "stages. Teams run entirely through the node's own registry, budgets, " +
-      "and privacy rules.",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/teams"),
-  },
-  {
-    name: "team_run",
-    description:
-      "MUTATING — runs an AI Team pipeline on the node's local model: up to " +
-      "24 model calls, typically minutes of sustained local compute. " +
-      "allowSensitive: true additionally consents to sandboxed run_code " +
-      "execution (Analyst team) — only pass it when the user has explicitly " +
-      "agreed. Returns the final answer plus the trace. Requires confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: {
-        template: { type: "string", description: "Template id from teams_list, e.g. research" },
-        question: { type: "string", description: "The task/question for the team" },
-        model: { type: "string", description: "Model alias (optional; node default otherwise)" },
-        allowSensitive: {
-          type: "boolean",
-          description: "Consent for sensitive tools (sandboxed code). Only with explicit user agreement.",
-        },
-        spec: {
-          type: "object",
-          description:
-            "Custom team spec (Developer tools must be enabled on the node). " +
-            "May only narrow tools and lower budgets.",
-        },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["template", "question"],
-      additionalProperties: false,
-    },
-    handler: async (client, args) => {
-      const gate = confirmGate(
-        args,
-        `Run the "${args.template}" AI Team on "${String(args.question).slice(0, 80)}" — ` +
-          `up to 24 local model calls, minutes of compute` +
-          (args.allowSensitive === true ? ", WITH sandboxed code execution consented" : "") +
-          ".",
-      );
-      if (gate) return gate;
-      // The run endpoint has no server-side model default (the app's UI always
-      // sends the composer's selection) — default to the node's active model,
-      // else its first ready alias.
-      let model = args.model;
-      if (!model) {
-        const health = await client.get("/core/health");
-        model = health?.modules?.runtime?.activeAlias;
-        if (!model) {
-          const catalog = await client.get("/core/models");
-          model = catalog?.aliases?.find?.((a) => a.status === "ready")?.alias;
-        }
-        if (!model) throw new Error("No model is loaded or installed on the node — install one first (model_ensure).");
-      }
-      const raw = await client.post(
-        "/core/teams/run",
-        {
-          template: args.template,
-          question: args.question,
-          model,
-          allowSensitive: args.allowSensitive === true,
-          ...(args.spec ? { spec: args.spec } : {}),
-        },
-        { timeoutMs: PIPELINE_TIMEOUT_MS },
-      );
-      const events = parseSse(raw);
-      const done = terminalEvent(events, "Team run");
-      const trace = events.filter((e) => e.trace).map((e) => e.trace);
-      return {
-        answer: done.answer,
-        modelCalls: done.modelCalls,
-        trace: trace.length > 60 ? [...trace.slice(0, 60), `…${trace.length - 60} more entries`] : trace,
-      };
-    },
-  },
-  {
-    name: "bench_list",
-    description:
-      "List the node's objective benchmark suites (read-only): cases and " +
-      "whether Developer tools (which gate running them) are enabled.",
-    inputSchema: NO_INPUT,
-    handler: (client) => client.get("/core/bench"),
-  },
-  {
-    name: "bench_run",
-    description:
-      "MUTATING — runs the node's objective benchmark suite against a model: " +
-      "~10 scored cases, minutes of sustained local compute. Requires the " +
-      "node's Developer tools switch to be on (see dev_tools_set). Requires " +
-      "confirm: true.",
-    annotations: { readOnlyHint: false },
-    inputSchema: {
-      type: "object",
-      properties: {
-        suite: { type: "string", description: "Suite id (default core)" },
-        model: { type: "string", description: "Model alias to benchmark (optional)" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      additionalProperties: false,
-    },
-    handler: async (client, args) => {
-      const gate = confirmGate(
-        args,
-        `Run benchmark suite "${args.suite ?? "core"}"${args.model ? ` on ${args.model}` : ""} — ` +
-          "roughly 10 scored model calls, minutes of local compute.",
-      );
-      if (gate) return gate;
-      const raw = await client.post(
-        "/core/bench/run",
-        { suite: args.suite ?? "core", ...(args.model ? { model: args.model } : {}) },
-        { timeoutMs: PIPELINE_TIMEOUT_MS },
-      );
-      const events = parseSse(raw);
-      const done = terminalEvent(events, "Benchmark");
-      return { summary: done.summary, cases: events.filter((e) => e.case).map((e) => e.case) };
-    },
-  },
-  {
-    name: "dev_tools_set",
-    description:
-      "MUTATING — turns the node's Developer tools switch on or off. On " +
-      "unlocks the benchmark and custom team specs (same budget ceilings " +
-      "and permission model; it reveals capability, never permission). " +
-      "Requires confirm: true.",
-    annotations: { readOnlyHint: false, idempotentHint: true },
-    inputSchema: {
-      type: "object",
-      properties: {
-        enabled: { type: "boolean", description: "true = on, false = off" },
-        node: NODE_PROP,
-        confirm: CONFIRM,
-      },
-      required: ["enabled"],
-      additionalProperties: false,
-    },
-    handler: (client, args) => {
-      if (typeof args.enabled !== "boolean") throw new Error("enabled must be true or false");
-      return (
-        confirmGate(args, `Turn the node's Developer tools ${args.enabled ? "ON" : "OFF"}.`) ??
-        client.post("/core/dev", { enabled: args.enabled })
-      );
+      return client.delete(path);
     },
   },
   {
     name: "feedback_send",
     description:
-      "MUTATING and OUTWARD-FACING — sends written feedback to the Koinos AI " +
-      "team through the node's own feedback relay (leaves this machine for " +
-      "koinosai.com; the node attaches its app version and platform). " +
-      "Optional email adds a reply address; includeLog attaches the node's " +
-      "recent event log — events only, upstream includes no chat content and " +
-      "no keys. Max 4000 chars. Compose the message with the user first. " +
-      "Requires confirm: true.",
+      "MUTATING and OUTWARD-FACING — sends written feedback to the KAI team " +
+      "through the node's own feedback relay (leaves this machine for " +
+      "koinosai.com; the node attaches its version and platform). Optional " +
+      "email adds a reply address; includeLog attaches the tail of the " +
+      "node's event log (events, not chat content). Max 4000 chars. Compose " +
+      "the message with the user first. Requires confirm: true.",
     annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
@@ -1256,7 +502,7 @@ export const tools = [
         email: { type: "string", description: "Optional reply-to email address" },
         includeLog: {
           type: "boolean",
-          description: "Attach the node's recent event-log tail (no chat content or keys)",
+          description: "Attach the tail of the node's event log",
         },
         node: NODE_PROP,
         confirm: CONFIRM,
@@ -1274,7 +520,7 @@ export const tools = [
       return (
         confirmGate(
           args,
-          "Send this feedback to the Koinos AI team" +
+          "Send this feedback to the KAI team" +
             (args.email ? `, reply-to ${args.email}` : "") +
             (args.includeLog ? ", with the node's event-log tail attached" : "") +
             `: "${message}"`,

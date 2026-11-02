@@ -1,7 +1,12 @@
 # koinos-ai-mcp — project context
 
-An MCP server that lets any AI agent operate a **Koinos AI** node
-(https://koinosai.com) through its local control plane on `127.0.0.1:41100`.
+An MCP server that lets any AI agent operate a **KAI Core** node (KAI Core Beta,
+formerly the Koinos AI app — https://koinosai.com) through its local control plane on
+`127.0.0.1:41100`. 1.0.0 targets Core (app 0.7.x); 0.7.x is the last Alpha release.
+
+Companion: **`../kai-plugin-mcp`** (MCP Bridge, plugin id `community.mcp-bridge`) —
+a native Core plugin for the features Core moved into plugins (documents, workflows,
+brain, assistant chats…), which have no HTTP route. Built to hand to Rex; see its README.
 
 Read `docs/KOINOS-AI-API.md` before changing tool code — the upstream surface is
 reverse-engineered, undocumented by the vendor, and moving fast. Re-verify against a
@@ -27,11 +32,10 @@ already OpenAI-compatible, so every existing client can use it directly.
 - `src/nodes.js` — client pool; resolves the optional `node` tool argument
 - `src/client.js` — HTTP client; the API key lives in a private field and is asserted
   (by test) never to appear in error messages
-- `src/tools.js` — the tool registry: 26 read-only + 26 confirm-gated mutating tools
-- `src/release.js` — GitHub latest-release lookup for the `nodes_status` update
-  check: cached 10 min, fail-soft, 3s timeout; the server's ONLY outbound call
-  beyond the configured nodes (`KOINOS_AI_NO_VERSION_CHECK=1` disables,
-  `KOINOS_AI_RELEASES_URL` overrides for tests)
+- `src/tools.js` — the tool registry: 8 read-only + 8 confirm-gated mutating tools,
+  exactly Core's wrappable `/core/*` surface. No outbound calls beyond the
+  configured nodes (the 0.x GitHub update check was removed: Core's /health reports
+  the engine version 0.7.2, not the app release, so the comparison was wrong).
 - `src/server.js` — MCP wiring (low-level `Server`, plain JSON Schema, no extra deps)
 - `test/fake-node.js` — a fake `/core/*` node whose response shapes mirror real
   observed output from a live app; tests run `node --test`, no framework
@@ -48,10 +52,11 @@ already OpenAI-compatible, so every existing client can use it directly.
 - Keep `test/fake-node.js` shapes in sync with real observed responses (documented in
   `docs/KOINOS-AI-API.md` → "Observed live responses").
 - Tracking upstream: check https://koinosai.com/updates first (machine-readable
-  `/updates.json`, `latest` field; exists since app 0.48.0). Release tags carry
-  stale 0.25-era source and no notes — the real code is on the rotating `claude/…`
-  session branch (list the repo's branches, take the newest; see the API doc
-  header). Read shapes there, then verify against the live node.
+  `/updates.json`; per-release `product` field since Core; lags the tags). Source
+  is now **`therexdev/kai-core` (`main`, tags current)** plus
+  `therexdev/kai-plugin-*` and `kai-plugin-registry`; the old `kaiapp` repo and
+  its rotating `claude/…` branches are Alpha-only. Route table: kai-core
+  `core/lib/gateway.js`. Read shapes there, then verify against the live node.
 - Third-party reference documents (PDF/DOCX) stay local and uncommitted — `.gitignore`
   enforces this.
 
@@ -63,18 +68,18 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
   the tool returns a preview of what would happen and instructs the agent to state
   intent to the user first. Tests assert zero writes reach the node unconfirmed.
 - `model_ensure`'s preview surfaces the download size before anything is fetched.
-- The wallet family (`create`, `unlock`, `reveal`, `restore`, `deposit`) and the
-  scheduler-URL setting are **not wrapped at any confirmation level** — an agent cannot
-  touch key material, move funds, or repoint the node at a different scheduler.
+- The wallet family (`create`, `restore`, `reveal`, `unlock`, `lock`, `deposit`),
+  the scheduler-URL setting (`/core/earn/config`), and the account sign-in /
+  wallet-link / spend-grant routes are **not wrapped at any confirmation level** — an
+  agent cannot touch key material, move funds, or repoint the node at a different
+  scheduler. A test greps tools.js for those paths.
 - MCP-registration writes (`/core/mcp` add/remove/toggle, app v0.48+) join that list:
   registering an MCP server makes the app execute an arbitrary command, so wrapping
   it would be remote code execution by design. Read-only listing only.
 - Mutating tools carry blunt descriptions and MCP tool annotations
   (`readOnlyHint`/`destructiveHint`).
-- `key_create` necessarily returns the new key's plaintext secret once — the only
-  moment it exists in the clear. The description tells the agent to relay it to the
-  user and never store it, and the preview warns when the FIRST key is about to
-  flip `/v1/*` from open localhost access to required auth.
+- (Alpha-era: `key_create` returned a key's plaintext once; keys have no HTTP route
+  on Core — key management lives in the Remote Access plugin.)
 
 ## Status
 
@@ -193,7 +198,28 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       updated; verified live on 0.54.1. Signed status post only, nothing new
       to ban. Still 52 tools, 40 tests.
 
+- [x] 1.0.0 — KAI Core Beta (2026-11-02). Core (app 0.7.17, engine 0.7.2) replaced
+      Alpha on 2026-10-31 and cut the HTTP control plane to models/network/earn/
+      feedback/account. Removed 36 tools whose routes 404 on Core (tasks, chats,
+      docs, keys, mcp, memory, voice, teams, bench, dev, remote, all koinos/rpc node
+      tools) plus earn_start (Core always throws "Use Share AI capacity") and
+      earn_nudge (no-op on Core); removed the update check. Added `model_uninstall`
+      (preview = Core's own removal plan; the old backlog item) and `account_status`
+      (credits/website). Fake node rebuilt from a live 0.7.17 capture. Every read and
+      every unconfirmed preview live-verified; confirmed writes not fired. 16 tools,
+      31 tests. Alpha's registration of this server in the old app was NOT migrated
+      (Core migrates only models + wallet); on Core MCP clients live in the KAI Tools
+      plugin. Companion plugin built: `../kai-plugin-mcp` (MCP Bridge 0.1.0).
+
 ## Ideas / backlog
+
+- Pitch MCP Bridge (`../kai-plugin-mcp`) to Rex for the plugin catalog (community
+  listing under our key, or adoption under his key with a new id). Also pitch this
+  server for the KAI Tools plugin's one-click MCP catalog (`kai-plugin-tools`
+  `plugin/service/core/lib/mcp-manager.js` CATALOG) — it moved there from Core.
+
+### Alpha-era backlog (superseded by Core; kept for history)
+
 
 - Model uninstall (app 0.43.0) — shapes read from the live branch:
   `GET /core/models/installed/<packageId>` returns a removal *plan* (upstream

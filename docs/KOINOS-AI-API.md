@@ -1,5 +1,84 @@
 # Koinos AI local API — reverse-engineered surface
 
+## KAI Core Beta (app 0.7.x) — current, read 2026-11-02
+
+KAI Core Beta (released 2026-10-31, `productName: "KAI Core Beta"`) replaced the
+Alpha app. Source: **`therexdev/kai-core`** (`main`), not `kaiapp`; plugins live in
+`therexdev/kai-plugin-*`, the catalog in `therexdev/kai-plugin-registry`. Release
+tags on kai-core are current (v0.7.17 = the installed app). The changelog at
+`koinosai.com/updates.json` now covers both products (`product` field per release)
+and lags the tags (latest 0.7.14 while 0.7.17 shipped).
+
+Same transport as Alpha: `127.0.0.1:41100`, `_sameSite` cross-site guard on both
+families, Host-header allowlist (DNS-rebinding guard), header-less callers trusted.
+New: **`KAI_CORE_TOKEN`** — when set in Core's environment every `/core/*` call needs
+`Authorization: Bearer <token>`; this server's `KOINOS_AI_API_KEY` already sends it.
+
+**`/health.version` is the Core engine package (`core/package.json`, 0.7.2), not the
+app release (0.7.17).** Nothing on the HTTP surface reports the app version, so
+version comparisons against release tags are meaningless — the 0.x update check was
+removed in 1.0.0.
+
+### The whole `/core/*` route table (`core/lib/gateway.js`, 1248 lines)
+
+| Route | Notes | Wrapped as |
+|---|---|---|
+| `GET /core/update` | `{kind: "packaged", canCheck: false}` on installed builds | — |
+| `GET /core/health` | adds `channel`, `productName`, `dataDir`; runtime gains `loadingAlias`, `loadingStage`, `inference {activeAlias, queued}` | `health` |
+| `GET /core/models` | aliases gain `blurb`, `downloadSizeBytes`, `diskBytes`, `vision`; top level `storage`, `runtime`, `download`, `importing`, `importError`, `runtimeDownload`, `modelQueue`, `ensure` | `models_list` |
+| `POST /core/models/ensure` `{alias}` | **202** `{started, alias, job, modelQueue}` — queued job | `model_ensure` |
+| `POST /core/models/download/cancel` `{alias?}` | `{cancelled, modelQueue, note?}` | `model_download_cancel` |
+| `POST /core/models/import` `{path, label?}` | unchanged job semantics | `model_import` |
+| `GET /core/models/installed/<packageId>` | removal **plan**: `{kind: downloaded\|imported, label, deletesFiles, keepsFile, freesBytes, redownloadable, inUse}` | `model_uninstall` preview |
+| `DELETE /core/models/installed/<packageId>` | refuses while loaded or during Alpha model migration; shared vision projectors kept | `model_uninstall` |
+| `DELETE /core/models/custom/<alias>` | `{}`; file never deleted | `model_remove_custom` |
+| `POST /core/feedback` `{message, email?, includeLog?}` | unchanged; `appVersion` sent is the engine version | `feedback_send` |
+| `GET /core/network/models` | models gain `inUsdPerM`, `outUsdPerM`, `ctxTokens` | `network_models` |
+| `GET /core/network/overview` | new "public overview" `{network: {state, providersOnline, models, providers, activity…}}` | — (overlaps network_status) |
+| `GET /core/network/status` | gains `workersUnsigned`, `workerProofEnforced`, per-worker `reputation`, `proof`, `ram` | `network_overview` |
+| `GET /core/network` | `{privacyMode, schedulerUrl, walletUnlocked, koinRehearsal}` | `network_status` |
+| `POST /core/network/config` `{privacyMode}` | three modes validated server-side | `network_set_privacy_mode` |
+| `GET /core/earn` | gains `koin` (mainnet KOIN, `mode: "shadow"`, `paymentsEnabled`, `policy` in bps); `producerReport` is now `{enabled: false, state: "plugin-managed"}` | `earn_status` |
+| `POST /core/earn/start` | **always throws** "Use Share AI capacity to participate in the network." | — (removed) |
+| `POST /core/earn/stop` | returns full earn status | `earn_stop` |
+| `POST /core/earn/nudge` | no-op on Core (`earn.nudge` undefined → `{}`) | — (removed) |
+| `POST /core/earn/config` | scheduler URL | **never** |
+| `POST /core/earn/wallet`, `/wallet/restore`, `/wallet/reveal`, `/unlock`, `/lock`, `/deposit` | key material / password / funds (deposit now always throws) | **never** |
+| `POST /core/chat/completions` | the desktop UI's chat lane | — (use `/v1`) |
+| `POST /core/embeddings`, `/v1/embeddings` | pass-through to the local engine | — (use `/v1`) |
+| `GET /core/account`, `GET /core/website-account` | credits vs website account status; privacy-gated (403 `localOnly: true` in Local-Only) | `account_status` |
+| `/core/account/link/*`, `/logout`, `/wallet`, `/wallet/unlink`, `/grant`, `/grant/revoke` | interactive sign-in, wallet linking, spend grants | **never** |
+
+**Gone from HTTP (404):** `/core/tasks`, `/core/chats`, `/core/docs`, `/core/keys`,
+`/core/mcp`, `/core/memory`, `/core/voice`, `/core/teams`, `/core/bench`, `/core/dev`,
+`/core/remote`, `/core/koinos/rpc`. Those features are plugins now (Workflows,
+Assistant, Documents, Remote Access, Tools, Brain, Koinos Node…), talking to Core over
+the in-process Foundation API (`electron/foundation-api.js`) and to each other over a
+local service bus (`electron/foundation-plugin-services.js`). There is exactly one HTTP
+server in Core (the gateway); plugins expose nothing over HTTP. **The only way for an
+outside agent to reach them is a plugin** — that is what `kai-plugin-mcp` (MCP Bridge)
+is. Plugin service methods it uses, read from each plugin's `plugin/service/index.js`:
+
+| Service | Methods |
+|---|---|
+| `kai.documents` | `list`, `get`, `save`, `remove` (remove confirms itself) |
+| `kai.workflows` | `listServices`, `exportService`, `list`, `get`, `propose`, `status`, `run` (confirms itself), `cancel`, `resume` |
+| `kai.brain` | `context`, `tools`, `tool`, `snapshot`, `search`, `goals`, `sourceList`, `sourceGet`, `source`, `sync`, `remember`/`forget` (confirm themselves) |
+| `kai.assistant` | `models.privateEligible`, `chats.list/read/get` (confirm unless granted), `chats.save`, `chats.grant`, `chats.grantWrite`, `chats.restrict`, `chats.revoke` |
+| `kai.connections` | `list`, `get`, `prepare`, `execute`, `request`, `tools`, `tool`, `events.*` |
+| `kai.tools` | `request`, `poll`, `cancel`, `list`, `call`, `payment`, `paymentEvents` |
+| `kai.code` | `projects` |
+
+Plugins install from the signed catalog or as third-party `.kaiplugin` files (Ed25519,
+any publisher; Core binds an id to its first publisher). Alpha's MCP registrations
+were **not** migrated — Settings migration copies only models and the encrypted wallet.
+
+---
+
+## Alpha (app ≤ 0.54.x) — historical
+
+Everything below describes the Alpha app and koinos-ai-mcp 0.x. Kept for reference.
+
 Read from `therexdev/kaiapp` @ branch `claude/kai-production-website-fqx4pf`,
 version **v0.21.2** (2026-08-15); route table re-read from `gateway.js` @ tag
 **v0.25.8** (2026-08-16). Sources: `core/lib/gateway.js`, `core/server.js`,

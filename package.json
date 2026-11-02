@@ -1,7 +1,7 @@
 {
   "name": "koinos-ai-mcp",
-  "version": "0.7.0",
-  "description": "MCP server for Koinos AI — operate a local Koinos AI node from any MCP client",
+  "version": "1.0.0",
+  "description": "MCP server for KAI Core (Koinos AI) — operate a local KAI node from any MCP client",
   "type": "module",
   "main": "src/index.js",
   "files": [

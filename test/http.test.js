@@ -44,9 +44,9 @@ test("http mode serves tools over Streamable HTTP and is read-only by default", 
     const client = await connectClient(stack.url());
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
-    assert.ok(names.includes("health") && names.includes("node_balances"));
+    assert.ok(names.includes("health") && names.includes("account_status"));
     // No mutating tool is visible…
-    assert.ok(!names.some((n) => /earn_start|chain_burn|task_create|key_create/.test(n)));
+    assert.ok(!names.some((n) => /earn_stop|model_uninstall|model_ensure|feedback_send/.test(n)));
     for (const t of tools) assert.notEqual(t.annotations?.readOnlyHint, false, t.name);
 
     // …and reads actually work end-to-end.
@@ -54,7 +54,7 @@ test("http mode serves tools over Streamable HTTP and is read-only by default", 
     assert.deepEqual(JSON.parse(health.content[0].text), FAKE_HEALTH);
 
     // …and a mutating tool is refused by name, telling the caller why.
-    const refused = await client.callTool({ name: "earn_start", arguments: { confirm: true } });
+    const refused = await client.callTool({ name: "earn_stop", arguments: { confirm: true } });
     assert.equal(refused.isError, true);
     assert.match(refused.content[0].text, /read-only/);
     assert.equal(stack.node.requests.filter((r) => r.method !== "GET").length, 0);
@@ -69,8 +69,8 @@ test("http writes mode exposes mutating tools, confirm gates intact", async () =
   try {
     const client = await connectClient(stack.url());
     const { tools } = await client.listTools();
-    assert.ok(tools.some((t) => t.name === "earn_start"));
-    const preview = await client.callTool({ name: "earn_start", arguments: {} });
+    assert.ok(tools.some((t) => t.name === "earn_stop"));
+    const preview = await client.callTool({ name: "earn_stop", arguments: {} });
     assert.equal(JSON.parse(preview.content[0].text).executed, false);
     await client.close();
   } finally {
