@@ -216,7 +216,7 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
       every unconfirmed preview live-verified; confirmed writes not fired. 16 tools,
       31 tests. Alpha's registration of this server in the old app was NOT migrated
       (Core migrates only models + wallet); on Core MCP clients live in the KAI Tools
-      plugin. Companion plugin built: `../kai-plugin-mcp` (MCP Bridge 0.1.0).
+      plugin. Companion plugin built: `../kai-plugin-mcp` (MCP Bridge; 0.1.2 merges the desktop and phone security reviews, signed, 2026-11-03).
 
 ## Ideas / backlog
 
