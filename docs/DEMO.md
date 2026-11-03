@@ -20,7 +20,7 @@ A recording of about two minutes showing an AI agent operating a KAI Core node. 
 
 The agent calls `model_uninstall` **without** confirm and gets Core's own removal plan back: one file, 4.7 GB freed, can be downloaded again, not loaded right now. Nothing has been deleted. It has to tell you and ask; only after a yes does it call again with `confirm: true`.
 
-This is KAI's own Ask-First rule applied to outside agents: **no mutating tool can fire silently.** Worth saying out loud that the wallet endpoints aren't wrapped at all, so an agent can't touch key material at any confirmation level.
+This is KAI's Ask-First idea applied to outside agents: **no mutating tool fires without the agent first stating what it will do.** Be straight that `confirm` is the agent's flag, not a dialog; for approvals in the KAI window, that's the MCP Bridge plugin. Worth saying out loud that the wallet endpoints aren't wrapped at all, so an agent can't touch key material at any confirmation level.
 
 ## Scene 3: privacy posture (~20s)
 

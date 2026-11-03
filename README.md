@@ -2,7 +2,7 @@
 
 An [MCP](https://modelcontextprotocol.io) server for [KAI](https://koinosai.com) (KAI Core Beta, formerly Koinos AI). It lets you operate a KAI node from Claude Code or any MCP client.
 
-> **Status: 1.0.0, for KAI Core Beta (app 0.7.17+).** Covers everything Core still serves on its local control plane: health, models (including uninstall), the compute network, privacy mode, earning status, account status and feedback. Verified against a live Core node on 2026-11-02.
+> **Status: 1.0.1, for KAI Core Beta (app 0.7.17+).** Covers everything Core still serves on its local control plane: health, models (including uninstall), the compute network, privacy mode, earning status, account status and feedback. Verified against a live Core node on 2026-11-02.
 >
 > **On the Alpha app (0.54.x)?** Stay on `koinos-ai-mcp@0.7` for now. Core moved tasks, chats, documents, keys, memory, voice, AI Teams, the blockchain node and remote access out of the control plane into separately installed plugins, so 1.0 doesn't carry those tools.
 >
@@ -63,7 +63,7 @@ Running a hardened or headless Core with `KAI_CORE_TOKEN` set? Set `KOINOS_AI_AP
 
 ```sh
 # on the machine next to the node — read-only by default
-set KOINOS_AI_HTTP_TOKEN=<a long random secret>
+set KOINOS_AI_HTTP_TOKEN=<a random secret, 32+ characters>
 npx -y koinos-ai-mcp --http 8721
 cloudflared tunnel --url http://127.0.0.1:8721
 ```
@@ -73,7 +73,10 @@ Add the printed `https://…trycloudflare.com/<token>/mcp` URL as a custom conne
 Security:
 - It binds to `127.0.0.1` only; exposure is the tunnel's job.
 - The endpoint hides behind the capability token, and anything else gets a bare 404.
-- HTTP mode is **read-only**: mutating tools are absent and refused unless you opt in with `--http-writes`.
+- HTTP mode is **read-only**: only tools marked read-only are served. Mutating tools are absent and refused unless you opt in with `--http-writes`.
+- Even with `--http-writes`, `feedback_send` stays local-only, and privacy can only be set to `local-only` over HTTP.
+- The token is part of the URL, so the URL itself is the secret: it shows up in tunnel logs and in your connector settings. Tokens shorter than 32 characters are refused; leave `KOINOS_AI_HTTP_TOKEN` unset for a random one per run.
+- Request bodies are capped at 1 MB.
 
 ### More than one machine
 
@@ -82,6 +85,8 @@ Security:
 ```
 
 The first entry is the default. Every tool takes an optional `node` argument, and `nodes_status` checks all of them at once.
+
+`KOINOS_AI_API_KEY` is only sent to nodes on this machine. A node on another machine needs its own `KOINOS_AI_API_KEY_<NAME>` (for example `KOINOS_AI_API_KEY_LAPTOP`), so one machine's key never travels to another, and never in the clear over `http://`.
 
 ## Tools
 
@@ -102,7 +107,9 @@ The first entry is the default. Every tool takes an optional `node` argument, an
 | `earn_stop` | **mutating** | Stop the earn worker (joining the network is done in the KAI window) |
 | `feedback_send` | **mutating** | Send written feedback to the KAI team via the node's relay |
 
-Every mutating tool requires `confirm: true`. Called without it, **nothing changes**: the tool returns a preview, so an agent has to state its intent before acting. This mirrors KAI's own Ask-First design.
+Every mutating tool requires `confirm: true`. Called without it, **nothing changes**: the tool returns a preview, so an agent has to state its intent before acting.
+
+`confirm` is set by the agent, not by you. It is a check on the agent, not a human approval, and nothing here pops up a dialog. That is why HTTP mode is read-only by default. If you want a person to approve every change in the KAI window, use the [MCP Bridge](https://github.com/Justyoureverydaynormalguybob/kai-plugin-mcp) plugin.
 
 ## What it looks like
 

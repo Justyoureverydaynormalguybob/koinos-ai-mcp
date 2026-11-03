@@ -27,7 +27,12 @@ if (httpPort) {
   const allowWrites =
     flag("--http-writes") || /^(1|true)$/i.test(process.env.KOINOS_AI_HTTP_WRITES ?? "");
   const token = process.env.KOINOS_AI_HTTP_TOKEN || generateToken();
-  await startHttp({ pool, port: httpPort, token, allowWrites, compact });
+  try {
+    await startHttp({ pool, port: httpPort, token, allowWrites, compact });
+  } catch (err) {
+    console.error(`koinos-ai-mcp: ${err.message}`);
+    process.exit(1);
+  }
   console.error(
     `koinos-ai-mcp: http mode on http://127.0.0.1:${httpPort}/${token}/mcp ` +
       `(${allowWrites ? "WRITES ENABLED" : "read-only"}; ` +

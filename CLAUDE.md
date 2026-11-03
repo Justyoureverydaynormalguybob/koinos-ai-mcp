@@ -67,6 +67,13 @@ Follows the Ask-First tool-permission design from Koinos AI's own spec (§34):
 - Every mutating tool requires `confirm: true`. Called without it, **nothing changes** —
   the tool returns a preview of what would happen and instructs the agent to state
   intent to the user first. Tests assert zero writes reach the node unconfirmed.
+  `confirm` is the agent's own flag, not a human approval — never describe it as one.
+- HTTP mode serves only tools with `readOnlyHint: true` (fail closed; every tool must
+  carry explicit annotations — a test checks). With `--http-writes`, tools with
+  `httpWrites: false` (feedback_send) are still not served and `httpWrites(args)`
+  limits others (privacy: local-only only). Tokens < 32 chars refused; bodies ≤ 1 MB.
+- `KOINOS_AI_API_KEY` falls back only to loopback nodes; remote nodes need their own
+  `KOINOS_AI_API_KEY_<NAME>`.
 - `model_ensure`'s preview surfaces the download size before anything is fetched.
 - The wallet family (`create`, `restore`, `reveal`, `unlock`, `lock`, `deposit`),
   the scheduler-URL setting (`/core/earn/config`), and the account sign-in /

@@ -12,11 +12,21 @@
 //                          First entry is the default node for tools called
 //                          without a `node` argument.
 //   KOINOS_AI_API_KEY_<NAME>  per-node key (name upper-cased, dashes → underscores);
-//                          falls back to KOINOS_AI_API_KEY.
+//                          falls back to KOINOS_AI_API_KEY for loopback nodes
+//                          only — a node on another machine needs its own.
 
 const DEFAULT_PORT = 41100;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+
+export function isLoopback(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+  } catch {
+    return false;
+  }
+}
 
 export function loadConfig(env = process.env) {
   const port = Number.parseInt(env.KAI_CORE_PORT ?? "", 10) || DEFAULT_PORT;
@@ -38,7 +48,10 @@ export function loadConfig(env = process.env) {
       nodes.push({
         name,
         baseUrl: url.replace(/\/+$/, ""),
-        apiKey: env[keyVar] || env.KOINOS_AI_API_KEY || undefined,
+        // The shared key only goes to nodes on this machine. A node on another
+        // machine needs its own KOINOS_AI_API_KEY_<NAME>, so one machine's key
+        // is never sent to another (in the clear, over http://).
+        apiKey: env[keyVar] || (isLoopback(url) ? env.KOINOS_AI_API_KEY : undefined) || undefined,
         timeoutMs,
       });
     }

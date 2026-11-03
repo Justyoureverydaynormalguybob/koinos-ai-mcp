@@ -13,12 +13,19 @@
 // reachable from an agent only through a plugin — see the companion
 // kai-plugin-mcp package.
 //
-// Mutating tools follow upstream spec §34 (Ask First): every one requires
-// confirm: true, and a call without it changes nothing — it returns a
-// preview. Wallet endpoints (create, restore, reveal, unlock, lock, deposit),
+// Mutating tools require confirm: true, and a call without it changes
+// nothing — it returns a preview. confirm is set by the agent, not by a
+// person: it makes the agent state its intent first, it is not a human
+// approval. HTTP mode therefore serves no mutating tool by default, and
+// some never over HTTP (see httpWrites below). Wallet endpoints (create, restore, reveal, unlock, lock, deposit),
 // the scheduler-URL setting, and the account sign-in / wallet-link / spend-
 // grant routes are deliberately not wrapped at any confirmation level; a test
 // greps this file to keep it that way.
+
+// Read-only tools say so explicitly. HTTP mode serves only tools marked
+// readOnlyHint: true, so a new tool without annotations stays off that
+// endpoint instead of slipping onto it.
+const READ_ONLY = Object.freeze({ readOnlyHint: true });
 
 const CONFIRM = {
   type: "boolean",
@@ -86,6 +93,7 @@ async function resolvePackage(client, args) {
 export const tools = [
   {
     name: "health",
+    annotations: READ_ONLY,
     description:
       "Check the KAI Core node's health (read-only): Core engine version, " +
       "product name, detected hardware (CPU/GPU/RAM/disk, runtime " +
@@ -99,6 +107,7 @@ export const tools = [
   },
   {
     name: "models_list",
+    annotations: READ_ONLY,
     description:
       "List models on the KAI Core node (read-only): the alias catalog with " +
       "package pins, licenses, minimum RAM, vision support and per-alias " +
@@ -112,6 +121,7 @@ export const tools = [
   },
   {
     name: "earn_status",
+    annotations: READ_ONLY,
     description:
       "Get the node's earning status (read-only): earn worker state, jobs " +
       "and receipts, scheduler URL, the legacy Testnet KAI balance " +
@@ -128,6 +138,7 @@ export const tools = [
   },
   {
     name: "network_status",
+    annotations: READ_ONLY,
     description:
       "Get the node's network and privacy posture (read-only): privacy mode " +
       "(local-only / local-first / network), scheduler URL, whether the " +
@@ -137,6 +148,7 @@ export const tools = [
   },
   {
     name: "network_models",
+    annotations: READ_ONLY,
     description:
       "List what the Koinos compute network can serve right now (read-only): " +
       "workers online and each network-servable model with its provider " +
@@ -147,6 +159,7 @@ export const tools = [
   },
   {
     name: "network_overview",
+    annotations: READ_ONLY,
     description:
       "Live view of the Koinos compute network as seen from this node " +
       "(read-only): scheduler reachability, workers online and how many are " +
@@ -159,6 +172,7 @@ export const tools = [
   },
   {
     name: "account_status",
+    annotations: READ_ONLY,
     description:
       "Get the node's KAI account sign-in state (read-only). scope 'credits' " +
       "(default) is the wallet-credits account at credits.koinosai.com that " +
@@ -184,6 +198,7 @@ export const tools = [
   },
   {
     name: "nodes_status",
+    annotations: READ_ONLY,
     description:
       "Aggregate status across every configured KAI Core node (read-only): " +
       "reachability, Core version, active model, earning state, wallet " +
@@ -277,6 +292,10 @@ export const tools = [
       required: ["mode"],
       additionalProperties: false,
     },
+    // Over HTTP (a tunnel), only the safe direction: local-only.
+    httpWrites: (args) =>
+      args.mode === "local-only" ||
+      'Over HTTP this tool can only set "local-only". Change to another mode in the KAI window or from a local MCP client.',
     handler: (client, args) =>
       confirmGate(args, `Set privacy mode to "${args.mode}".`) ??
       client.post("/core/network/config", { privacyMode: args.mode }),
@@ -494,7 +513,9 @@ export const tools = [
       "email adds a reply address; includeLog attaches the tail of the " +
       "node's event log (events, not chat content). Max 4000 chars. Compose " +
       "the message with the user first. Requires confirm: true.",
-    annotations: { readOnlyHint: false },
+    annotations: { readOnlyHint: false, openWorldHint: true },
+    // Outward-facing (a reply-to address, the node's log): local clients only.
+    httpWrites: false,
     inputSchema: {
       type: "object",
       properties: {

@@ -9,17 +9,20 @@ import { tools } from "./tools.js";
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
 
-export function createServer(pool, { compact = false, readOnly = false } = {}) {
+export function createServer(pool, { compact = false, readOnly = false, http = false } = {}) {
   const server = new Server(
     { name: "koinos-ai-mcp", version },
     { capabilities: { tools: {} } },
   );
 
-  // readOnly (the HTTP-mode default) exposes only tools that cannot change
-  // anything — mutating tools vanish from the list AND are refused by name.
-  const visible = readOnly
-    ? tools.filter((t) => t.annotations?.readOnlyHint !== false)
-    : tools;
+  // readOnly (the HTTP-mode default) exposes only tools explicitly marked
+  // readOnlyHint: true — everything else vanishes from the list AND is
+  // refused by name. Fail closed: a tool without annotations is not served.
+  // Over HTTP, tools marked httpWrites: false are never served, even with
+  // writes enabled.
+  const visible = tools.filter((t) =>
+    readOnly ? t.annotations?.readOnlyHint === true : !(http && t.httpWrites === false),
+  );
 
   // With one configured node the `node` argument can never do anything —
   // compact mode drops it (29 copies of a useless parameter add up).
@@ -38,10 +41,16 @@ export function createServer(pool, { compact = false, readOnly = false } = {}) {
     const tool = visible.find((t) => t.name === name);
     if (!tool) {
       return errorResult(
-        readOnly && tools.some((t) => t.name === name)
-          ? `Tool "${name}" is disabled: this endpoint is read-only.`
-          : `Unknown tool: ${name}`,
+        !tools.some((t) => t.name === name)
+          ? `Unknown tool: ${name}`
+          : readOnly
+            ? `Tool "${name}" is disabled: this endpoint is read-only.`
+            : `Tool "${name}" is not available over HTTP; use a local MCP client.`,
       );
+    }
+    if (http && typeof tool.httpWrites === "function") {
+      const allowed = tool.httpWrites(args);
+      if (allowed !== true) return errorResult(allowed);
     }
     try {
       const client = pool.resolve(args.node);

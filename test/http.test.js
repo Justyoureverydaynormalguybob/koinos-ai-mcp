@@ -96,3 +96,57 @@ test("wrong or missing token is a plain 404 that reveals nothing", async () => {
     await stack.close();
   }
 });
+
+test("every tool is explicitly read-only or mutating; read-only HTTP serves only the former", async () => {
+  const { tools } = await import("../src/tools.js");
+  for (const t of tools) assert.equal(typeof t.annotations?.readOnlyHint, "boolean", t.name);
+  const stack = await startStack();
+  try {
+    const client = await connectClient(stack.url());
+    const listed = (await client.listTools()).tools;
+    const expected = tools.filter((t) => t.annotations.readOnlyHint === true).map((t) => t.name).sort();
+    assert.deepEqual(listed.map((t) => t.name).sort(), expected);
+    await client.close();
+  } finally {
+    await stack.close();
+  }
+});
+
+test("http writes mode still keeps feedback local-only and privacy to local-only", async () => {
+  const stack = await startStack({ allowWrites: true });
+  try {
+    const client = await connectClient(stack.url());
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    assert.ok(!names.includes("feedback_send"));
+    const feedback = await client.callTool({ name: "feedback_send", arguments: { message: "hi", confirm: true } });
+    assert.equal(feedback.isError, true);
+    assert.match(feedback.content[0].text, /not available over HTTP/);
+
+    const loosen = await client.callTool({ name: "network_set_privacy_mode", arguments: { mode: "network", confirm: true } });
+    assert.equal(loosen.isError, true);
+    assert.match(loosen.content[0].text, /local-only/);
+    assert.equal(stack.node.requests.filter((r) => r.method !== "GET").length, 0);
+
+    const tighten = await client.callTool({ name: "network_set_privacy_mode", arguments: { mode: "local-only" } });
+    assert.equal(JSON.parse(tighten.content[0].text).executed, false); // preview, gate intact
+    await client.close();
+  } finally {
+    await stack.close();
+  }
+});
+
+test("short tokens are refused and oversized bodies get 413", async () => {
+  const pool = createPool({ nodes: [{ name: "local", baseUrl: "http://127.0.0.1:1", timeoutMs: 1000 }], defaultNode: "local" });
+  assert.throws(() => startHttp({ pool, port: 0, token: "short-secret" }), /at least 32/);
+  const stack = await startStack();
+  try {
+    const res = await fetch(stack.url(), {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ pad: "x".repeat(1024 * 1024 + 10) }),
+    });
+    assert.equal(res.status, 413);
+  } finally {
+    await stack.close();
+  }
+});

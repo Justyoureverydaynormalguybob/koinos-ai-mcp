@@ -1,6 +1,6 @@
 {
   "name": "koinos-ai-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for KAI Core (Koinos AI) — operate a local KAI node from any MCP client",
   "type": "module",
   "main": "src/index.js",
@@ -32,6 +32,6 @@
     "url": "git+https://github.com/Justyoureverydaynormalguybob/koinos-ai-mcp.git"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.32.2"
   }
 }

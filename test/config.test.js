@@ -43,3 +43,15 @@ test("rejects malformed node specs", () => {
     /duplicate node names/,
   );
 });
+
+test("the shared API key is never sent to a node on another machine", () => {
+  const config = loadConfig({
+    KOINOS_AI_NODES: "desktop=http://127.0.0.1:41100,laptop=http://192.168.1.20:41100,v6=http://[::1]:41100",
+    KOINOS_AI_API_KEY: "global",
+  });
+  assert.deepEqual(config.nodes.map((n) => [n.name, n.apiKey]), [
+    ["desktop", "global"],
+    ["laptop", undefined],
+    ["v6", "global"],
+  ]);
+});
